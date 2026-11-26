@@ -223,3 +223,66 @@ def test_structured_json_request_logging(caplog: pytest.LogCaptureFixture) -> No
     assert payload["status_code"] == 200
     assert isinstance(payload["duration_ms"], (int, float))
     assert payload["duration_ms"] >= 0
+
+
+def test_audits_and_monitors_pagination_and_limit_bounds() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_page", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    a1 = client.post("/audits", json={"target_url": "https://a1.example.com"}, headers=headers)
+    a2 = client.post("/audits", json={"target_url": "https://a2.example.com"}, headers=headers)
+    assert a1.status_code == 201 and a2.status_code == 201
+
+    all_audits = client.get("/audits", headers=headers).json()
+    assert len(all_audits) == 2
+
+    paged_audits = client.get("/audits?limit=1&offset=1", headers=headers)
+    assert paged_audits.status_code == 200
+    assert len(paged_audits.json()) == 1
+    assert paged_audits.json()[0]["audit_id"] == all_audits[1]["audit_id"]
+
+    m1 = client.post("/monitors", json={"target_url": "https://m1.example.com"}, headers=headers)
+    m2 = client.post("/monitors", json={"target_url": "https://m2.example.com"}, headers=headers)
+    assert m1.status_code == 201 and m2.status_code == 201
+
+    all_monitors = client.get("/monitors", headers=headers).json()
+    assert len(all_monitors) == 2
+
+    paged_monitors = client.get("/monitors?limit=1&offset=1", headers=headers)
+    assert paged_monitors.status_code == 200
+    assert len(paged_monitors.json()) == 1
+    assert paged_monitors.json()[0]["monitor_id"] == all_monitors[1]["monitor_id"]
+
+    assert client.get("/audits?limit=201", headers=headers).status_code == 422
+    assert client.get("/monitors?limit=201", headers=headers).status_code == 422
+
+
+def test_metrics_endpoint_returns_live_counts_and_uptime() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_metrics", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    initial = client.get("/metrics")
+    assert initial.status_code == 200
+    assert initial.json()["total_audits"] == 0
+    assert initial.json()["total_monitors"] == 0
+    assert initial.json()["processed_stripe_events"] == 0
+    assert initial.json()["uptime_seconds"] >= 0.0
+
+    assert (
+        client.post("/audits", json={"target_url": "https://m.example.com"}, headers=headers).status_code
+        == 201
+    )
+    assert (
+        client.post("/monitors", json={"target_url": "https://m.example.com"}, headers=headers).status_code
+        == 201
+    )
+
+    after = client.get("/metrics")
+    assert after.status_code == 200
+    body = after.json()
+    assert body["total_audits"] == 1
+    assert body["total_monitors"] == 1
+    assert body["processed_stripe_events"] == 0
+    assert body["uptime_seconds"] >= 0.0

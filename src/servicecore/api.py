@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -69,6 +69,7 @@ __all__ = [
     "ExportResponse",
     "HealthcheckResponse",
     "InMemoryAuditStore",
+    "MetricsResponse",
     "PublishGitHubRequest",
     "PublishGitHubResponse",
     "RunDueMonitorsRequest",
@@ -99,6 +100,15 @@ class ReadinessResponse(BaseModel):
     """Readiness probe response."""
 
     status: Literal["ready"] = "ready"
+
+
+class MetricsResponse(BaseModel):
+    """Operational metrics snapshot for observability."""
+
+    total_audits: int = Field(ge=0)
+    total_monitors: int = Field(ge=0)
+    processed_stripe_events: int = Field(ge=0)
+    uptime_seconds: float = Field(ge=0.0)
 
 
 class CreateAuditRequest(BaseModel):
@@ -204,6 +214,7 @@ def create_app(
     rate_limit_per_minute: int | None = None,
 ) -> FastAPI:
     """Build and configure the ServiceCore FastAPI application."""
+    started_at = time.monotonic()
     app = FastAPI(title="ServiceCore Compliance API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -281,6 +292,19 @@ def create_app(
                 ) from exc
         return ReadinessResponse(status="ready")
 
+    @app.get("/metrics", response_model=MetricsResponse)
+    def metrics_endpoint(request: Request) -> MetricsResponse:
+        active_store: AuditStore = request.app.state.store
+        stats = active_store.get_stats()
+        in_mem_stripe = len(getattr(request.app.state, "processed_stripe_events", set()))
+        processed_stripe = stats.get("processed_stripe_events", 0) + in_mem_stripe
+        return MetricsResponse(
+            total_audits=stats.get("total_audits", 0),
+            total_monitors=stats.get("total_monitors", 0),
+            processed_stripe_events=processed_stripe,
+            uptime_seconds=round(time.monotonic() - started_at, 3),
+        )
+
     @app.post("/dev/token", response_model=DevTokenResponse)
     def dev_token_endpoint() -> DevTokenResponse:
         if os.environ.get("SERVICECORE_DEV_MODE") != "1":
@@ -301,9 +325,11 @@ def create_app(
     def list_audits_endpoint(
         request: Request,
         tenant: CurrentTenant,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
     ) -> list[AuditBundle]:
         active_store: AuditStore = request.app.state.store
-        return active_store.list_for_org(tenant.org_id)
+        return active_store.list_for_org(tenant.org_id, limit=limit, offset=offset)
 
     @app.post("/audits", response_model=AuditBundle, status_code=status.HTTP_201_CREATED)
     def create_audit_endpoint(
@@ -389,9 +415,11 @@ def create_app(
     def list_monitors_endpoint(
         request: Request,
         tenant: CurrentTenant,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
     ) -> list[MonitorSchedule]:
         active_store: AuditStore = request.app.state.store
-        return active_store.list_monitors_for_org(tenant.org_id)
+        return active_store.list_monitors_for_org(tenant.org_id, limit=limit, offset=offset)
 
     @app.post("/monitors/{monitor_id}/run", response_model=MonitorRunResult)
     def run_monitor_endpoint(

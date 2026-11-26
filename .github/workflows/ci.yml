@@ -45,3 +45,14 @@ jobs:
         run: npx tsc --noEmit
       - name: Production build
         run: npm run build
+
+  container-build-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose configuration
+        run: docker compose config --quiet
+      - name: Build API container image
+        run: docker build -t servicecore-api:ci .
+      - name: Build Workbench container image
+        run: docker build -t servicecore-workbench:ci ./workbench

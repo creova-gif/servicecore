@@ -27,8 +27,8 @@ class AuditStore(Protocol):
         """Fetch an AuditBundle strictly scoped to org_id, or None if not found."""
         ...
 
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        """List all AuditBundles belonging to org_id."""
+    def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
+        """List AuditBundles belonging to org_id with pagination."""
         ...
 
     def save_monitor(self, monitor: MonitorSchedule) -> None:
@@ -39,8 +39,14 @@ class AuditStore(Protocol):
         """Fetch a MonitorSchedule strictly scoped to org_id, or None if not found."""
         ...
 
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        """List all MonitorSchedules belonging to org_id."""
+    def list_monitors_for_org(
+        self, org_id: str, limit: int = 50, offset: int = 0
+    ) -> list[MonitorSchedule]:
+        """List MonitorSchedules belonging to org_id with pagination."""
+        ...
+
+    def get_stats(self) -> dict[str, int]:
+        """Return aggregate store counts for observability."""
         ...
 
 
@@ -57,12 +63,13 @@ class InMemoryAuditStore:
     def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
         return self._bundles.get((org_id, audit_id))
 
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        return [
+    def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
+        items = [
             bundle
             for (stored_org_id, _), bundle in self._bundles.items()
             if stored_org_id == org_id
         ]
+        return items[offset : offset + limit]
 
     def save_monitor(self, monitor: MonitorSchedule) -> None:
         self._monitors[(monitor.org_id, monitor.monitor_id)] = monitor
@@ -70,12 +77,23 @@ class InMemoryAuditStore:
     def get_monitor(self, org_id: str, monitor_id: str) -> MonitorSchedule | None:
         return self._monitors.get((org_id, monitor_id))
 
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        return [
+    def list_monitors_for_org(
+        self, org_id: str, limit: int = 50, offset: int = 0
+    ) -> list[MonitorSchedule]:
+        items = [
             monitor
             for (stored_org_id, _), monitor in self._monitors.items()
             if stored_org_id == org_id
         ]
+        return items[offset : offset + limit]
+
+    def get_stats(self) -> dict[str, int]:
+        """Return aggregate store counts for observability."""
+        return {
+            "total_audits": len(self._bundles),
+            "total_monitors": len(self._monitors),
+            "processed_stripe_events": 0,
+        }
 
 
 class SQLiteAuditStore:
@@ -179,8 +197,8 @@ class SQLiteAuditStore:
             return None
         return AuditBundle.model_validate_json(row[0])
 
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        """List all AuditBundles belonging to org_id, newest updated first."""
+    def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
+        """List AuditBundles belonging to org_id, newest updated first, with pagination."""
         with self._lock:
             conn = self._connect()
             try:
@@ -189,8 +207,9 @@ class SQLiteAuditStore:
                     SELECT bundle_json FROM audits
                     WHERE org_id = ?
                     ORDER BY updated_at_utc DESC, audit_id ASC
+                    LIMIT ? OFFSET ?
                     """,
-                    (org_id,),
+                    (org_id, limit, offset),
                 ).fetchall()
             finally:
                 self._close_if_ephemeral(conn)
@@ -250,8 +269,10 @@ class SQLiteAuditStore:
             return None
         return MonitorSchedule.model_validate_json(row[0])
 
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        """List all MonitorSchedules belonging to org_id, newest updated first."""
+    def list_monitors_for_org(
+        self, org_id: str, limit: int = 50, offset: int = 0
+    ) -> list[MonitorSchedule]:
+        """List MonitorSchedules belonging to org_id, newest updated first, with pagination."""
         with self._lock:
             conn = self._connect()
             try:
@@ -260,9 +281,28 @@ class SQLiteAuditStore:
                     SELECT monitor_json FROM monitors
                     WHERE org_id = ?
                     ORDER BY updated_at_utc DESC, monitor_id ASC
+                    LIMIT ? OFFSET ?
                     """,
-                    (org_id,),
+                    (org_id, limit, offset),
                 ).fetchall()
             finally:
                 self._close_if_ephemeral(conn)
         return [MonitorSchedule.model_validate_json(row[0]) for row in rows]
+
+    def get_stats(self) -> dict[str, int]:
+        """Return aggregate store counts for observability."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                total_audits = int(conn.execute("SELECT COUNT(*) FROM audits").fetchone()[0])
+                total_monitors = int(conn.execute("SELECT COUNT(*) FROM monitors").fetchone()[0])
+                processed_stripe_events = int(
+                    conn.execute("SELECT COUNT(*) FROM stripe_events").fetchone()[0]
+                )
+            finally:
+                self._close_if_ephemeral(conn)
+        return {
+            "total_audits": total_audits,
+            "total_monitors": total_monitors,
+            "processed_stripe_events": processed_stripe_events,
+        }

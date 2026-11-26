@@ -40,3 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added due-monitor background scheduler loop and SSRF-safe signed webhook regression alerts (`src/servicecore/alerts.py`).
   - Added `servicecore sarif` CLI subcommand for exporting signed `AuditBundle` files to SARIF `2.1.0`.
   - Added Workbench SARIF download action and repository CI/contribution templates (`.github/workflows/ci.yml`, `CONTRIBUTING.md`).
+- **Wave 8–9 — Enterprise Hardening, Pagination, Metrics & Modularity:**
+  - Enabled SQLite WAL mode with busy timeout and foreign-key enforcement for concurrent persistence safety.
+  - Added token `exp` TTL validation, security response headers, `X-Request-ID` propagation, structured JSON logging, and sliding-window rate limiting.
+  - Added `/readyz` readiness and `/metrics` observability probes alongside paginated `/audits` and `/monitors` list endpoints.
+  - Hardened the multi-page crawler with URL canonicalization and crawl budget guards.
+  - Switched Workbench typography to offline-safe system font stacks and decomposed the UI into modular `HeaderBar`, `QueuePanel`, `MonitorsPanel`, and `DecisionCanvas` components.
+  - Added `container-build-validation` CI job validating `docker compose config --quiet` and building both `servicecore-api:ci` and `servicecore-workbench:ci` images.
