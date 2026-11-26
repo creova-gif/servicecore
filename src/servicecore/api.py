@@ -400,8 +400,7 @@ def create_app(
                 ) from exc
         return ReadinessResponse(status="ready")
 
-    @app.get("/metrics", response_model=MetricsResponse)
-    def metrics_endpoint(request: Request) -> MetricsResponse:
+    def _collect_metrics(request: Request) -> MetricsResponse:
         active_store: AuditStore = request.app.state.store
         stats = active_store.get_stats()
         in_mem_stripe = len(getattr(request.app.state, "processed_stripe_events", set()))
@@ -411,6 +410,32 @@ def create_app(
             total_monitors=stats.get("total_monitors", 0),
             processed_stripe_events=processed_stripe,
             uptime_seconds=round(time.monotonic() - started_at, 3),
+        )
+
+    @app.get("/metrics", response_model=MetricsResponse)
+    def metrics_endpoint(request: Request) -> MetricsResponse:
+        return _collect_metrics(request)
+
+    @app.get("/metrics/prometheus", tags=["Operations"])
+    def metrics_prometheus_endpoint(request: Request) -> Response:
+        metrics = _collect_metrics(request)
+        lines = [
+            "# HELP servicecore_audits_total Total number of stored accessibility audits.",
+            "# TYPE servicecore_audits_total gauge",
+            f"servicecore_audits_total {metrics.total_audits}",
+            "# HELP servicecore_monitors_total Total number of configured compliance monitors.",
+            "# TYPE servicecore_monitors_total gauge",
+            f"servicecore_monitors_total {metrics.total_monitors}",
+            "# HELP servicecore_stripe_events_total Total number of processed Stripe webhook events.",
+            "# TYPE servicecore_stripe_events_total counter",
+            f"servicecore_stripe_events_total {metrics.processed_stripe_events}",
+            "# HELP servicecore_uptime_seconds Application uptime in seconds.",
+            "# TYPE servicecore_uptime_seconds gauge",
+            f"servicecore_uptime_seconds {metrics.uptime_seconds}",
+        ]
+        return Response(
+            content="\n".join(lines) + "\n",
+            media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
     @app.post("/dev/token", response_model=DevTokenResponse)

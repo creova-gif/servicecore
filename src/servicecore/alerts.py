@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -86,19 +87,41 @@ def build_regression_alert(
     )
 
 
-def sign_webhook_payload(raw_body: bytes, secret: str) -> str:
+def sign_webhook_payload(
+    raw_body: bytes,
+    secret: str,
+    *,
+    timestamp: str | None = None,
+) -> str:
     """Compute an HMAC-SHA256 signature header value for a raw webhook request body."""
-    return "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    signed_payload = (
+        f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
+    )
+    return "sha256=" + hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
 
 
 def verify_webhook_signature(
     raw_body: bytes,
     signature_header: str | None,
     secret: str,
+    *,
+    timestamp_header: str | None = None,
+    max_age_seconds: int = 300,
+    now: int | None = None,
 ) -> bool:
     """Verify an incoming X-ServiceCore-Signature-256 header in constant time."""
     if not signature_header or not secret:
         return False
+    if timestamp_header is not None:
+        try:
+            ts = int(timestamp_header)
+        except ValueError:
+            return False
+        current_now = int(time.time()) if now is None else now
+        if abs(current_now - ts) > max_age_seconds:
+            return False
+        expected = sign_webhook_payload(raw_body, secret, timestamp=timestamp_header)
+        return hmac.compare_digest(signature_header, expected)
     expected = sign_webhook_payload(raw_body, secret)
     return hmac.compare_digest(signature_header, expected)
 
@@ -116,12 +139,16 @@ def dispatch_webhook_alert(
         payload.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
     secret = signing_secret if signing_secret is not None else os.environ.get("SERVICECORE_WEBHOOK_SECRET")
+    ts = str(int(time.time()))
     headers = {
         "Content-Type": "application/json",
         "X-ServiceCore-Event": "monitor.regression",
+        "X-ServiceCore-Timestamp": ts,
     }
     if secret:
-        headers["X-ServiceCore-Signature-256"] = sign_webhook_payload(body_bytes, secret)
+        headers["X-ServiceCore-Signature-256"] = sign_webhook_payload(
+            body_bytes, secret, timestamp=ts
+        )
     if client is not None:
         response = client.post(validated_url, content=body_bytes, headers=headers)
         return bool(response.is_success)

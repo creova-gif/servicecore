@@ -57,3 +57,8 @@
 ## Wave 15–16: Chain-of-Custody Audit Events & Enterprise API Reference
 - [x] Add immutable compliance event trail (`GET /audits/{audit_id}/events`) for finding reviews, bulk reviews, certified exports, and GitHub publishing (Wave 15)
 - [x] Publish `docs/API.md` enterprise API reference, document `SERVICECORE_RATE_LIMIT_PER_MINUTE` / `SERVICECORE_ENABLE_DOCS` in `.env.example` & `README.md`, and link `docs/API.md` in `README.md` (Wave 16)
+
+## Wave 17: Prometheus Metrics, Replay-Safe Webhook Verification & Workbench Triage Unit Suite
+- [x] Add `GET /metrics/prometheus` Prometheus text-format scrape endpoint (`src/servicecore/api.py`)
+- [x] Add `X-ServiceCore-Timestamp` replay-window protection (`max_age_seconds=300`) to `sign_webhook_payload`, `verify_webhook_signature`, and `dispatch_webhook_alert` (`src/servicecore/alerts.py`)
+- [x] Extract Workbench triage utilities (`workbench/src/lib/triage.ts`) with unit test suite and update `docs/API.md`, `CHANGELOG.md`, and `TASKS.md`

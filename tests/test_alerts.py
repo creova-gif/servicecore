@@ -379,13 +379,21 @@ def test_sign_webhook_payload_and_dispatch_header_verification(
     assert len(captured_requests) == 1
     req = captured_requests[0]
     assert req.headers["content-type"] == "application/json"
+    ts_header = req.headers.get("x-servicecore-timestamp")
+    assert ts_header is not None
+    assert ts_header.isdigit()
     sig_header = req.headers.get("x-servicecore-signature-256")
     assert sig_header is not None
     expected_sig = (
-        "sha256=" + hmac.new(secret.encode("utf-8"), req.content, hashlib.sha256).hexdigest()
+        "sha256="
+        + hmac.new(
+            secret.encode("utf-8"),
+            f"{ts_header}.".encode() + req.content,
+            hashlib.sha256,
+        ).hexdigest()
     )
     assert hmac.compare_digest(sig_header, expected_sig)
-    assert sig_header == sign_webhook_payload(req.content, secret)
+    assert sig_header == sign_webhook_payload(req.content, secret, timestamp=ts_header)
 
     # When signing_secret is None and SERVICECORE_WEBHOOK_SECRET is unset, header is omitted
     captured_requests.clear()
@@ -393,6 +401,7 @@ def test_sign_webhook_payload_and_dispatch_header_verification(
         ok_unsigned = dispatch_webhook_alert(_PUBLIC_WEBHOOK_URL, payload, client=client)
     assert ok_unsigned is True
     assert len(captured_requests) == 1
+    assert "x-servicecore-timestamp" in captured_requests[0].headers
     assert "x-servicecore-signature-256" not in captured_requests[0].headers
 
     # Empty string signing_secret also omits the header even if env var is set
@@ -410,7 +419,12 @@ def test_sign_webhook_payload_and_dispatch_header_verification(
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         ok_env = dispatch_webhook_alert(_PUBLIC_WEBHOOK_URL, payload, client=client)
     assert ok_env is True
-    assert captured_requests[0].headers.get("x-servicecore-signature-256") == expected_sig
+    env_req = captured_requests[0]
+    env_ts = env_req.headers.get("x-servicecore-timestamp")
+    assert env_ts is not None
+    assert env_req.headers.get("x-servicecore-signature-256") == sign_webhook_payload(
+        env_req.content, secret, timestamp=env_ts
+    )
 
 
 def test_run_due_monitors_passes_webhook_secret(
@@ -476,9 +490,11 @@ def test_run_due_monitors_passes_webhook_secret(
         )
     assert len(captured_requests) == 1
     req = captured_requests[0]
+    ts_header = req.headers.get("x-servicecore-timestamp")
+    assert ts_header is not None
     assert req.headers.get("x-servicecore-event") == "monitor.regression"
     assert req.headers.get("x-servicecore-signature-256") == sign_webhook_payload(
-        req.content, secret
+        req.content, secret, timestamp=ts_header
     )
 
 
@@ -518,9 +534,63 @@ def test_dispatch_webhook_alert_includes_event_header() -> None:
 
     assert ok is True
     assert len(captured) == 1
+    ts_header = captured[0].headers.get("x-servicecore-timestamp")
+    assert ts_header is not None
     assert captured[0].headers.get("x-servicecore-event") == "monitor.regression"
     assert verify_webhook_signature(
         captured[0].content,
         captured[0].headers.get("x-servicecore-signature-256"),
         "sec",
+        timestamp_header=ts_header,
+        now=int(ts_header),
     ) is True
+
+
+def test_verify_webhook_signature_timestamp_replay_window() -> None:
+    secret = "whsec_replay_secret"
+    raw_body = b'{"audit_id":"aud-9","new_regressions_count":1}'
+    ts = "1700000000"
+    sig = sign_webhook_payload(raw_body, secret, timestamp=ts)
+
+    # Valid within replay window
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header=ts, max_age_seconds=300, now=1700000100
+        )
+        is True
+    )
+    # Boundary: exactly max_age_seconds is still valid
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header=ts, max_age_seconds=300, now=1700000300
+        )
+        is True
+    )
+    # Expired (now - ts > max_age_seconds)
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header=ts, max_age_seconds=300, now=1700000301
+        )
+        is False
+    )
+    # Future clock skew exceeding max_age_seconds
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header=ts, max_age_seconds=300, now=1699999699
+        )
+        is False
+    )
+    # Invalid non-integer timestamp
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header="not-an-int", max_age_seconds=300, now=1700000000
+        )
+        is False
+    )
+    # Tampered timestamp header fails signature check
+    assert (
+        verify_webhook_signature(
+            raw_body, sig, secret, timestamp_header="1700000001", max_age_seconds=300, now=1700000001
+        )
+        is False
+    )

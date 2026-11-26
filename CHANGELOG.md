@@ -72,3 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added immutable compliance audit event logging (`GET /audits/{audit_id}/events`) covering finding reviews, bulk reviews, certified exports, and GitHub issue publishing.
   - Published enterprise API reference documentation in `docs/API.md` covering bearer authentication, all grouped endpoints, webhook signature verification, and standard error codes.
   - Documented `SERVICECORE_RATE_LIMIT_PER_MINUTE` and `SERVICECORE_ENABLE_DOCS` in `.env.example` and `README.md`.
+- **Wave 17 — Prometheus Metrics, Replay-Safe Webhook Verification & Workbench Triage Unit Suite:**
+  - Added `GET /metrics/prometheus` (`text/plain; version=0.0.4; charset=utf-8`) exposing `servicecore_audits_total`, `servicecore_monitors_total`, `servicecore_stripe_events_total`, and `servicecore_uptime_seconds`.
+  - Added `X-ServiceCore-Timestamp` replay-window protection (`max_age_seconds=300`) and timestamped `<timestamp>.<raw_body>` HMAC-SHA256 signing/verification in `src/servicecore/alerts.py`.
+  - Extracted Workbench triage utilities (`workbench/src/lib/triage.ts`) with unit test coverage.

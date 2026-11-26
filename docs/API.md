@@ -57,6 +57,7 @@ Response (`200 OK`):
 | `GET` | `/healthcheck` | None | Alias for `/healthz` returning `{"status": "ok"}`. |
 | `GET` | `/readyz` | None | Readiness probe; verifies SQLite connectivity (`SELECT 1;`) when `SQLiteAuditStore` is active (returns `503` on failure). |
 | `GET` | `/metrics` | None | Operational metrics snapshot (`total_audits`, `total_monitors`, `processed_stripe_events`, `uptime_seconds`). |
+| `GET` | `/metrics/prometheus` | None | Prometheus text-format (`text/plain; version=0.0.4; charset=utf-8`) scrape endpoint exposing `servicecore_audits_total`, `servicecore_monitors_total`, `servicecore_stripe_events_total`, and `servicecore_uptime_seconds`. |
 | `POST` | `/dev/token` | None | Mints a dev bearer token for `org_dev` when `SERVICECORE_DEV_MODE=1` (otherwise `404`). |
 
 ### Audits & Chain of Custody
@@ -116,11 +117,12 @@ When `run-due` dispatches regression alerts (`new_regressions > 0`), ServiceCore
 | Header | Description |
 | --- | --- |
 | `X-ServiceCore-Event` | Event type identifier (`monitor.regression`). |
-| `X-ServiceCore-Signature-256` | HMAC-SHA256 signature formatted as `sha256=<hex_digest>` over the raw UTF-8 request body, computed with `SERVICECORE_WEBHOOK_SECRET` (omitted if no secret is configured). |
+| `X-ServiceCore-Timestamp` | Unix timestamp (seconds) when the webhook was dispatched. Used with `X-ServiceCore-Signature-256` to enforce replay-window protection. |
+| `X-ServiceCore-Signature-256` | HMAC-SHA256 signature formatted as `sha256=<hex_digest>` over `<timestamp>.<raw_body>` (or `<raw_body>` when `timestamp_header` is omitted), computed with `SERVICECORE_WEBHOOK_SECRET` (omitted if no secret is configured). |
 
 ### Verifying Signatures
 
-Consumers can verify incoming webhook deliveries in constant time using `verify_webhook_signature` from `servicecore.alerts`:
+Consumers can verify incoming webhook deliveries in constant time with replay-window protection (`max_age_seconds=300` by default) using `verify_webhook_signature` from `servicecore.alerts`:
 
 ```python
 from servicecore.alerts import verify_webhook_signature
@@ -129,10 +131,14 @@ is_valid = verify_webhook_signature(
     raw_body=request_body_bytes,
     signature_header=headers.get("X-ServiceCore-Signature-256"),
     secret=os.environ["SERVICECORE_WEBHOOK_SECRET"],
+    timestamp_header=headers.get("X-ServiceCore-Timestamp"),
+    max_age_seconds=300,
 )
 if not is_valid:
-    raise ValueError("Invalid ServiceCore webhook signature")
+    raise ValueError("Invalid or expired ServiceCore webhook signature")
 ```
+
+When `timestamp_header` is provided, `verify_webhook_signature` rejects non-integer timestamps and any delivery where `abs(now - timestamp) > max_age_seconds` (`300` seconds / 5 minutes by default), then verifies the HMAC-SHA256 digest over `<timestamp>.<raw_body>`.
 
 ---
 

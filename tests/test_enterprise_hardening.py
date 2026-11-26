@@ -1015,3 +1015,38 @@ def test_enable_docs_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SERVICECORE_ENABLE_DOCS", "1")
     env_enabled_client = TestClient(create_app(auth_secret=_AUTH_SECRET))
     assert env_enabled_client.get("/docs").status_code == 200
+
+
+def test_prometheus_metrics_endpoint() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_prom", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create one audit and one monitor so counters/gauges are non-zero
+    audit_resp = client.post(
+        "/audits", json={"target_url": "https://example.com"}, headers=headers
+    )
+    assert audit_resp.status_code == 201
+    monitor_resp = client.post(
+        "/monitors", json={"target_url": "https://example.com"}, headers=headers
+    )
+    assert monitor_resp.status_code == 201
+
+    resp = client.get("/metrics/prometheus")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+
+    body = resp.text
+    for metric_name in (
+        "servicecore_audits_total",
+        "servicecore_monitors_total",
+        "servicecore_stripe_events_total",
+        "servicecore_uptime_seconds",
+    ):
+        assert f"# HELP {metric_name} " in body
+        assert f"# TYPE {metric_name} " in body
+
+    assert "servicecore_audits_total 1\n" in body
+    assert "servicecore_monitors_total 1\n" in body
+    assert "servicecore_stripe_events_total 0\n" in body
+    assert "servicecore_uptime_seconds " in body

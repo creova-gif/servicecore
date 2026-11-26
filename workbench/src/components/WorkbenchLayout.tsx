@@ -22,6 +22,12 @@ import {
   runMonitor,
   updateMonitor,
 } from "@/lib/api";
+import {
+  buildInitialReviews,
+  computeQueueCounts,
+  filterFindings,
+  isEvidenceBound,
+} from "@/lib/triage";
 import { useAuditKeyboardShortcuts } from "@/hooks/useAuditKeyboardShortcuts";
 import type {
   AuditBundle,
@@ -37,11 +43,7 @@ import type {
 import { DecisionCanvas } from "@/components/DecisionCanvas";
 import { HeaderBar } from "@/components/HeaderBar";
 import { MonitorsPanel } from "@/components/MonitorsPanel";
-import {
-  assertNever,
-  QueuePanel,
-  type QueueFilter,
-} from "@/components/QueuePanel";
+import { QueuePanel, type QueueFilter } from "@/components/QueuePanel";
 
 export interface WorkbenchLayoutProps {
   initialBundle: AuditBundle;
@@ -99,20 +101,6 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
   anchor.click();
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
-}
-
-function buildInitialReviews(bundle: AuditBundle): FindingReview[] {
-  const byId = new Map(bundle.reviews.map((r) => [r.finding_id, r]));
-  return bundle.findings.map(
-    (f) =>
-      byId.get(f.finding_id) ?? {
-        finding_id: f.finding_id,
-        status: "PENDING",
-        rejection_reason: null,
-        reviewer_id: null,
-        signed_at_utc: null,
-      },
-  );
 }
 
 /**
@@ -331,40 +319,13 @@ export function WorkbenchLayout({
       if (review?.status !== "PENDING") {
         return false;
       }
-      const patch = patchById.get(finding.finding_id);
-      return Boolean(patch && patch.rule_id === finding.rule_id);
+      return isEvidenceBound(finding, patchById.get(finding.finding_id));
     });
   }, [bundle.findings, reviewById, patchById]);
 
   const pendingBoundCount = pendingBoundFindings.length;
 
-  const counts = useMemo(() => {
-    let pending = 0;
-    let approved = 0;
-    let rejected = 0;
-    let edited = 0;
-    for (const review of reviews) {
-      switch (review.status) {
-        case "PENDING":
-          pending += 1;
-          break;
-        case "APPROVED":
-          approved += 1;
-          break;
-        case "REJECTED":
-          rejected += 1;
-          break;
-        case "EDITED":
-          edited += 1;
-          break;
-        default:
-          assertNever(review.status);
-      }
-    }
-    const total = reviews.length;
-    const signed = approved + rejected + edited;
-    return { total, pending, approved, rejected, edited, signed };
-  }, [reviews]);
+  const counts = useMemo(() => computeQueueCounts(reviews), [reviews]);
 
   const viewState: WorkbenchViewState = useMemo(() => {
     if (initialState) {
@@ -379,24 +340,10 @@ export function WorkbenchLayout({
     return "partial";
   }, [initialState, bundle.findings.length, counts.pending]);
 
-  const filteredFindings = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
-    return bundle.findings.filter((f) => {
-      if (filter !== "ALL" && reviewById.get(f.finding_id)?.status !== filter) {
-        return false;
-      }
-      if (!normalizedQuery) {
-        return true;
-      }
-      return [
-        f.rule_id,
-        f.wcag_criterion,
-        f.aoda_section,
-        f.source,
-        f.target_selector,
-      ].some((field) => field.toLowerCase().includes(normalizedQuery));
-    });
-  }, [filter, searchQuery, bundle.findings, reviewById]);
+  const filteredFindings = useMemo(
+    () => filterFindings(bundle.findings, reviewById, filter, searchQuery),
+    [filter, searchQuery, bundle.findings, reviewById],
+  );
 
   const activeFinding: FindingEvidence | null = useMemo(() => {
     if (filteredFindings.length === 0) {
