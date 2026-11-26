@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { AuditBundle } from "@/types/audit";
 
 export interface HeaderBarProps {
@@ -59,6 +59,12 @@ export function HeaderBar({
   monitorsOpen,
   onToggleMonitors,
 }: HeaderBarProps) {
+  const [confirmingDeleteAudit, setConfirmingDeleteAudit] = useState(false);
+
+  useEffect(() => {
+    setConfirmingDeleteAudit(false);
+  }, [auditId]);
+
   return (
     <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] px-4 py-2.5">
       <div className="flex items-center gap-3 min-w-0">
@@ -118,15 +124,40 @@ export function HeaderBar({
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              aria-label="Delete selected audit"
-              disabled={isDeletingAudit}
-              onClick={() => onDeleteAudit(auditId)}
-              className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-xs font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
-            >
-              {isDeletingAudit ? "Deleting..." : "Delete"}
-            </button>
+            {confirmingDeleteAudit ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label={`Confirm delete audit ${auditId}`}
+                  disabled={isDeletingAudit}
+                  onClick={() => {
+                    setConfirmingDeleteAudit(false);
+                    onDeleteAudit(auditId);
+                  }}
+                  className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--accent-critical)] bg-[var(--accent-critical)] font-mono text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                >
+                  {isDeletingAudit ? "Deleting..." : "Confirm Delete"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingAudit}
+                  onClick={() => setConfirmingDeleteAudit(false)}
+                  className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] font-mono text-xs font-semibold text-[var(--ink-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                aria-label="Delete selected audit"
+                disabled={isDeletingAudit}
+                onClick={() => setConfirmingDeleteAudit(true)}
+                className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-xs font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
+              >
+                {isDeletingAudit ? "Deleting..." : "Delete"}
+              </button>
+            )}
           </div>
         ) : null}
 

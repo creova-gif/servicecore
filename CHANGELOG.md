@@ -55,3 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added outbound webhook HMAC-SHA256 signing for monitor alert deliveries.
   - Added `DELETE /audits/{audit_id}` endpoint with org-scoped persistence, Workbench `"Delete"` audit switcher control, and `deleteAudit` API client coverage.
   - Added concurrent SQLite WAL stress verification tests for multi-writer audit and monitor operations.
+- **Wave 12 — Monitor SSRF-on-Write, 1 MiB Body-Size DoS Guard, CLI `monitors-run-due` & Inline Delete Confirmation:**
+  - Added SSRF target validation on monitor creation to reject private/loopback/metadata URLs on write.
+  - Enforced a 1 MiB request body-size DoS guard in the API service.
+  - Added `monitors-run-due` CLI subcommand for executing due monitors and dispatching webhook alerts.
+  - Added two-click inline delete confirmation for selected audits in `HeaderBar` and recurring monitors in `MonitorsPanel`.

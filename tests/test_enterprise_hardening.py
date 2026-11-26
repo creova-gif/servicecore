@@ -253,8 +253,8 @@ def test_audits_and_monitors_pagination_and_limit_bounds() -> None:
     assert len(paged_audits.json()) == 1
     assert paged_audits.json()[0]["audit_id"] == all_audits[1]["audit_id"]
 
-    m1 = client.post("/monitors", json={"target_url": "https://m1.example.com"}, headers=headers)
-    m2 = client.post("/monitors", json={"target_url": "https://m2.example.com"}, headers=headers)
+    m1 = client.post("/monitors", json={"target_url": "https://example.com/m1"}, headers=headers)
+    m2 = client.post("/monitors", json={"target_url": "https://example.com/m2"}, headers=headers)
     assert m1.status_code == 201 and m2.status_code == 201
 
     all_monitors = client.get("/monitors", headers=headers).json()
@@ -286,7 +286,7 @@ def test_metrics_endpoint_returns_live_counts_and_uptime() -> None:
         == 201
     )
     assert (
-        client.post("/monitors", json={"target_url": "https://m.example.com"}, headers=headers).status_code
+        client.post("/monitors", json={"target_url": "https://example.com"}, headers=headers).status_code
         == 201
     )
 
@@ -310,7 +310,7 @@ def test_patch_and_delete_monitor_with_tenant_isolation() -> None:
 
     created = client.post(
         "/monitors",
-        json={"target_url": "https://mon.example.com", "cadence_hours": 24, "crawl": False},
+        json={"target_url": "https://example.com/mon", "cadence_hours": 24, "crawl": False},
         headers=org_a_headers,
     )
     assert created.status_code == 201
@@ -553,3 +553,38 @@ def test_cache_control_no_store_on_tenant_endpoints(monkeypatch: pytest.MonkeyPa
     health_resp = client.get("/healthcheck")
     assert health_resp.status_code == 200
     assert "Cache-Control" not in health_resp.headers
+
+
+def test_create_monitor_blocks_ssrf_at_creation() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_ssrf_mon", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.post(
+        "/monitors",
+        json={"target_url": "http://127.0.0.1/internal"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_request_body_size_limit_returns_413() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_size", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    oversized_url = "https://example.com/" + ("a" * 1_048_576)
+    payload = json.dumps({"target_url": oversized_url})
+    assert len(payload.encode("utf-8")) > 1_048_576
+
+    resp = client.post("/audits", content=payload, headers=headers)
+    assert resp.status_code == 413
+    assert resp.json()["detail"] == "Request body exceeds 1 MiB limit"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert resp.headers["X-Request-ID"]
+    assert resp.headers["Cache-Control"] == "no-store"

@@ -24,8 +24,10 @@ from servicecore.schemas import (
     FindingEvidence,
     FindingReview,
     ScannerError,
+    SSRFBlockedError,
     UnsignedFindingError,
 )
+from servicecore.store import SQLiteAuditStore
 from servicecore.synthesizer import ClaudeSynthesizer, deduplicate_findings
 
 __all__ = ["build_parser", "main", "run_audit"]
@@ -147,6 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
     sarif_p = sub.add_parser("sarif", help="Export a signed AuditBundle to SARIF 2.1.0 JSON")
     sarif_p.add_argument("bundle_path", type=Path, help="Path to AuditBundle JSON")
     sarif_p.add_argument("--out", type=Path, default=None, help="Optional SARIF output path")
+
+    monitors_p = sub.add_parser("monitors-run-due", help="Run all due scheduled monitors for an organization")
+    monitors_p.add_argument("--db-path", required=True, type=Path, help="Path to SQLiteAuditStore database")
+    monitors_p.add_argument("--org-id", required=True, help="Organization ID to run due monitors for")
+    monitors_p.add_argument("--webhook-url", default=None, help="Optional webhook URL for regression alerts")
+    monitors_p.add_argument("--webhook-secret", default=None, help="Optional HMAC-SHA256 secret for webhook alerts")
     return parser
 
 
@@ -231,6 +239,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError, UnsignedFindingError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
+        return 0
+
+    if args.command == "monitors-run-due":
+        # Deferred import to break circular dependency: servicecore.alerts imports run_audit from servicecore.cli.
+        from servicecore.alerts import run_due_monitors
+
+        try:
+            store = SQLiteAuditStore(args.db_path)
+            results = run_due_monitors(
+                store,
+                args.org_id,
+                webhook_url=args.webhook_url,
+                webhook_secret=args.webhook_secret,
+            )
+        except (SSRFBlockedError, ScannerError, OSError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(
+            json.dumps(
+                {
+                    "monitors_run": len(results),
+                    "audit_ids": [r.audit.audit_id for r in results],
+                    "regressions_detected": sum(len(r.diff.new_regressions) for r in results if r.diff),
+                }
+            )
+        )
         return 0
 
     return 1

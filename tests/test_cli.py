@@ -13,7 +13,8 @@ from servicecore.cli import _select_scanner, build_parser, main
 from servicecore.crawler import SiteCrawlScanner
 from servicecore.exporter import sign_bundle
 from servicecore.scanners import PdfUaInspector, WebAxeScanner
-from servicecore.schemas import AuditBundle, FindingEvidence, FindingReview
+from servicecore.schemas import AuditBundle, FindingEvidence, FindingReview, MonitorSchedule
+from servicecore.store import SQLiteAuditStore
 
 
 def _sample_pdf_file(path: Path) -> Path:
@@ -230,6 +231,80 @@ def test_cli_sarif_rejects_unsigned_bundle(tmp_path: Path, capsys: object) -> No
     unsigned_bundle_path.write_text(unsigned_bundle.model_dump_json(), encoding="utf-8")
 
     rc = main(["sarif", str(unsigned_bundle_path)])
+    assert rc == 1
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "ERROR:" in captured.err
+
+
+def test_cli_monitors_run_due_empty_db(tmp_path: Path, capsys: object) -> None:
+    db_path = tmp_path / "audits.db"
+    SQLiteAuditStore(db_path)
+
+    rc = main(["monitors-run-due", "--db-path", str(db_path), "--org-id", "org-empty"])
+    assert rc == 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    summary = json.loads(captured.out)
+    assert summary == {"monitors_run": 0, "audit_ids": [], "regressions_detected": 0}
+
+
+def test_cli_monitors_run_due_executes_due_monitor_and_counts_regressions(
+    tmp_path: Path, capsys: object
+) -> None:
+    db_path = tmp_path / "audits.db"
+    store = SQLiteAuditStore(db_path)
+
+    f1 = _sample_finding("f1", "fp-1")
+    f2 = _sample_finding("f2", "fp-2", rule="button-name")
+    baseline = AuditBundle(
+        audit_id="baseline-1",
+        org_id="org-1",
+        target_url="https://example.com",
+        findings=[f1],
+    )
+    store.save(baseline)
+    store.save_monitor(
+        MonitorSchedule(
+            monitor_id="mon-1",
+            org_id="org-1",
+            target_url="https://example.com",
+            baseline_audit_id="baseline-1",
+        )
+    )
+
+    new_bundle = AuditBundle(
+        audit_id="audit-new",
+        target_url="https://example.com",
+        findings=[f1, f2],
+    )
+    with patch("servicecore.alerts.run_audit", return_value=new_bundle) as mock_run:
+        rc = main(["monitors-run-due", "--db-path", str(db_path), "--org-id", "org-1"])
+
+    assert rc == 0
+    mock_run.assert_called_once()
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    summary = json.loads(captured.out)
+    assert summary == {
+        "monitors_run": 1,
+        "audit_ids": ["audit-new"],
+        "regressions_detected": 1,
+    }
+
+
+def test_cli_monitors_run_due_blocks_ssrf_webhook_url(tmp_path: Path, capsys: object) -> None:
+    db_path = tmp_path / "audits.db"
+    SQLiteAuditStore(db_path)
+
+    rc = main(
+        [
+            "monitors-run-due",
+            "--db-path",
+            str(db_path),
+            "--org-id",
+            "org-1",
+            "--webhook-url",
+            "http://127.0.0.1/hook",
+        ]
+    )
     assert rc == 1
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert "ERROR:" in captured.err

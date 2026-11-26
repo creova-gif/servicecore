@@ -12,6 +12,7 @@ from typing import Any, Literal
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from servicecore.alerts import run_due_monitors
@@ -47,7 +48,7 @@ from servicecore.exporter import (
 )
 from servicecore.github_publisher import PublishedIssue, publish_bundle_to_github
 from servicecore.sarif import export_sarif
-from servicecore.scanners import ScannerBackend
+from servicecore.scanners import ScannerBackend, validate_public_url
 from servicecore.schemas import (
     AuditBundle,
     DiffReport,
@@ -90,6 +91,7 @@ _DEFAULT_CORS_ORIGINS = [
     "http://localhost:3100",
     "http://localhost:3105",
 ]
+_MAX_REQUEST_BODY_BYTES = 1_048_576
 _api_logger = logging.getLogger("servicecore.api")
 
 
@@ -249,7 +251,25 @@ def create_app(
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
         start = time.monotonic()
-        response = await call_next(request)
+        response: Response | None = None
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            content_length = request.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > _MAX_REQUEST_BODY_BYTES:
+                        response = JSONResponse(
+                            status_code=413,
+                            content={"detail": "Request body exceeds 1 MiB limit"},
+                        )
+                except ValueError:
+                    pass
+            if response is None and len(await request.body()) > _MAX_REQUEST_BODY_BYTES:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request body exceeds 1 MiB limit"},
+                )
+        if response is None:
+            response = await call_next(request)
         duration_ms = round((time.monotonic() - start) * 1000.0, 3)
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -428,6 +448,14 @@ def create_app(
         request: Request,
         tenant: CurrentTenant,
     ) -> MonitorSchedule:
+        try:
+            validate_public_url(body.target_url)
+        except (SSRFBlockedError, ScannerError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
         active_store: AuditStore = request.app.state.store
         monitor = MonitorSchedule(
             monitor_id=f"mon-{uuid.uuid4().hex[:12]}",

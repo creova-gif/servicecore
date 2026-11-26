@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import type { MonitorSchedule } from "@/types/audit";
 
 export interface MonitorsPanelProps {
@@ -52,6 +52,10 @@ export function MonitorsPanel({
   onDeleteMonitor,
   onClose,
 }: MonitorsPanelProps) {
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(
+    null,
+  );
+
   return (
     <div id="workbench-monitors-panel" className="px-4 lg:px-6 pt-4">
       <section
@@ -221,14 +225,39 @@ export function MonitorsPanel({
                           ? "Pause"
                           : "Resume"}
                     </button>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => onDeleteMonitor(m)}
-                      className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-[11px] font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
-                    >
-                      {isDeleting ? "Deleting..." : "Delete"}
-                    </button>
+                    {confirmingDeleteId === m.monitor_id ? (
+                      <>
+                        <button
+                          type="button"
+                          aria-label={`Confirm delete monitor ${m.target_url}`}
+                          disabled={isBusy}
+                          onClick={() => {
+                            setConfirmingDeleteId(null);
+                            onDeleteMonitor(m);
+                          }}
+                          className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-critical)] bg-[var(--accent-critical)] font-mono text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => setConfirmingDeleteId(null)}
+                          className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] font-mono text-[11px] font-semibold text-[var(--ink-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => setConfirmingDeleteId(m.monitor_id)}
+                        className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-[11px] font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
+                      >
+                        {isDeleting ? "Deleting..." : "Delete"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={isBusy}
