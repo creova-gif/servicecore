@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 __all__ = [
     "AuditBundle",
+    "AuditSummary",
     "AuditTelemetry",
     "CorruptPdfError",
     "DiffItem",
@@ -197,3 +198,23 @@ class MonitorRunResult(BaseModel):
     monitor: MonitorSchedule
     audit: AuditBundle
     diff: DiffReport | None = None
+
+
+class AuditSummary(BaseModel):
+    """Executive summary of an AuditBundle's findings, review sign-off state, and telemetry."""
+
+    audit_id: str = Field(min_length=1)
+    org_id: str = Field(min_length=1)
+    target_url: str = Field(min_length=1)
+    created_at_utc: datetime
+    total_findings: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    approved_count: int = Field(ge=0)
+    edited_count: int = Field(ge=0)
+    rejected_count: int = Field(ge=0)
+    critical_count: int = Field(ge=0)
+    serious_count: int = Field(ge=0)
+    signed: bool
+    evidence_digest: str | None = None
+    llm_cost_usd: float | None = None
+    estimated_gross_margin_pct: float | None = None

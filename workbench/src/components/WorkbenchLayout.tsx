@@ -162,10 +162,12 @@ export function WorkbenchLayout({
 
   const [patches, setPatches] = useState<RemediationPatch[]>(initialBundle.patches);
   const [filter, setFilter] = useState<QueueFilter>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(
     initialBundle.findings[0]?.finding_id ?? null,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
   const [draftRejectionReason, setDraftRejectionReason] = useState("");
@@ -210,6 +212,8 @@ export function WorkbenchLayout({
     setReviews(buildInitialReviews(nextBundle));
     setPatches(nextBundle.patches);
     setFilter("ALL");
+    setSearchQuery("");
+    setHelpOpen(false);
     setSelectedId(nextBundle.findings[0]?.finding_id ?? null);
     setIsEditing(false);
     setIsRejecting(false);
@@ -313,13 +317,23 @@ export function WorkbenchLayout({
   }, [initialState, bundle.findings.length, counts.pending]);
 
   const filteredFindings = useMemo(() => {
-    if (filter === "ALL") {
-      return bundle.findings;
-    }
-    return bundle.findings.filter(
-      (f) => reviewById.get(f.finding_id)?.status === filter,
-    );
-  }, [filter, bundle.findings, reviewById]);
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return bundle.findings.filter((f) => {
+      if (filter !== "ALL" && reviewById.get(f.finding_id)?.status !== filter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      return [
+        f.rule_id,
+        f.wcag_criterion,
+        f.aoda_section,
+        f.source,
+        f.target_selector,
+      ].some((field) => field.toLowerCase().includes(normalizedQuery));
+    });
+  }, [filter, searchQuery, bundle.findings, reviewById]);
 
   const activeFinding: FindingEvidence | null = useMemo(() => {
     if (filteredFindings.length === 0) {
@@ -1220,6 +1234,7 @@ export function WorkbenchLayout({
     isEditing,
     isRejecting,
     drawerOpen,
+    helpOpen,
     canUndo: Boolean(undoSnapshot),
     onNext: () => navigateRelative(1),
     onPrev: () => navigateRelative(-1),
@@ -1230,6 +1245,8 @@ export function WorkbenchLayout({
     onCancelEdit: handleCancelEdit,
     onCancelReject: handleCancelReject,
     onCloseDrawer: () => setDrawerOpen(false),
+    onToggleHelp: () => setHelpOpen((prev) => !prev),
+    onCloseHelp: () => setHelpOpen(false),
     onUndo: handleUndo,
   });
 
@@ -1284,6 +1301,8 @@ export function WorkbenchLayout({
         monitorsCount={monitors.length}
         monitorsOpen={monitorsOpen}
         onToggleMonitors={() => setMonitorsOpen((prev) => !prev)}
+        helpOpen={helpOpen}
+        onToggleHelp={() => setHelpOpen((prev) => !prev)}
       />
 
       {/* Main Split-Pane Area */}
@@ -1298,6 +1317,8 @@ export function WorkbenchLayout({
             progressPct={progressPct}
             filter={filter}
             onFilterChange={setFilter}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
             viewState={viewState}
             filteredFindings={filteredFindings}
             reviewById={reviewById}
@@ -1327,6 +1348,8 @@ export function WorkbenchLayout({
                 progressPct={progressPct}
                 filter={filter}
                 onFilterChange={setFilter}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
                 viewState={viewState}
                 filteredFindings={filteredFindings}
                 reviewById={reviewById}
@@ -1471,6 +1494,66 @@ export function WorkbenchLayout({
           />
         </main>
       </div>
+
+      {/* Keyboard Shortcuts Reference Modal */}
+      {helpOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-slate-900/40"
+            aria-hidden="true"
+            onClick={() => setHelpOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Keyboard shortcuts"
+            className="relative z-10 w-full max-w-md rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-5 shadow-lg"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-hairline)] pb-3">
+              <h2 className="text-base font-semibold text-[var(--ink-primary)]">
+                Keyboard Shortcuts
+              </h2>
+              <button
+                type="button"
+                onClick={() => setHelpOpen(false)}
+                className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] font-mono text-xs font-semibold text-[var(--ink-primary)] hover:bg-[var(--bg-canvas)]"
+              >
+                Close
+              </button>
+            </div>
+            <dl className="mt-4 space-y-2.5 text-xs">
+              {(
+                [
+                  { keys: ["j", "k"], desc: "Navigate to next / previous finding" },
+                  { keys: ["a"], desc: "Approve active finding" },
+                  { keys: ["e"], desc: "Edit remediation patch" },
+                  { keys: ["r"], desc: "Reject active finding" },
+                  { keys: ["u"], desc: "Undo last triage action" },
+                  { keys: ["?"], desc: "Toggle shortcuts help" },
+                  { keys: ["Esc"], desc: "Close active modal, drawer, or editor" },
+                ] as const
+              ).map((item) => (
+                <div
+                  key={item.desc}
+                  className="flex items-center justify-between gap-4 border-b border-[var(--border-hairline)] pb-2 last:border-b-0 last:pb-0"
+                >
+                  <dt className="text-[var(--ink-muted)]">{item.desc}</dt>
+                  <dd className="flex items-center gap-1 font-mono font-semibold text-[var(--ink-primary)]">
+                    {item.keys.map((k, idx) => (
+                      <React.Fragment key={k}>
+                        {idx > 0 ? <span className="text-[var(--ink-muted)]">/</span> : null}
+                        <kbd className="rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[11px]">
+                          {k}
+                        </kbd>
+                      </React.Fragment>
+                    ))}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      ) : null}
 
       {/* 5s Undo Toast */}
       {undoSnapshot ? (

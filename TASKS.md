@@ -45,3 +45,8 @@
 - [x] Add `PATCH /monitors/{monitor_id}` and `DELETE /monitors/{monitor_id}` lifecycle CRUD endpoints and Workbench monitor controls
 - [x] Add formula-safe CSV export (`GET /audits/{audit_id}/export/csv`) and Workbench `"Download Bundle JSON"` / `"Download CSV"` export actions
 - [x] Extract Workbench keyboard triage shortcuts into a dedicated hook with expanded unit test coverage
+
+## Wave 11–13: Webhook Signing, Audit Deletion, Guardrails & Executive Summary
+- [x] Add outbound webhook HMAC-SHA256 signing, `DELETE /audits/{audit_id}` with org-scoped persistence, and concurrent SQLite WAL stress verification tests (Wave 11)
+- [x] Add monitor SSRF-on-write validation, 1 MiB request body-size DoS guard, `monitors-run-due` CLI subcommand, and two-click inline delete confirmation in `HeaderBar` / `MonitorsPanel` (Wave 12)
+- [x] Add `GET /audits/{audit_id}/summary` lightweight executive counts endpoint, `verify_webhook_signature` (`X-ServiceCore-Signature-256` / `X-ServiceCore-Event`), Workbench Queue search filtering, and `?` keyboard shortcuts dialog (Wave 13)

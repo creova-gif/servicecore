@@ -13,13 +13,15 @@ from fastapi.testclient import TestClient
 
 import servicecore.api as api_mod
 import servicecore.auth as auth_mod
-from servicecore.api import create_app, mint_auth_token
+from servicecore.api import InMemoryAuditStore, create_app, mint_auth_token
 from servicecore.exporter import export_csv, sign_bundle
 from servicecore.schemas import (
     AuditBundle,
+    AuditTelemetry,
     FindingEvidence,
     FindingReview,
     RemediationPatch,
+    SeverityLevel,
     UnsignedFindingError,
 )
 from servicecore.store import SQLiteAuditStore
@@ -588,3 +590,121 @@ def test_request_body_size_limit_returns_413() -> None:
     assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert resp.headers["X-Request-ID"]
     assert resp.headers["Cache-Control"] == "no-store"
+
+
+def test_get_audit_summary_counts_and_cross_tenant_404() -> None:
+    store = InMemoryAuditStore()
+    app = create_app(
+        store=store,
+        auth_secret=_AUTH_SECRET,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    client = TestClient(app)
+    token_a = mint_auth_token(org_id="org_sum_a", sub="a@example.com", secret=_AUTH_SECRET)
+    token_b = mint_auth_token(org_id="org_sum_b", sub="b@example.com", secret=_AUTH_SECRET)
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    now = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
+    severities: tuple[SeverityLevel, ...] = (
+        "critical",
+        "critical",
+        "serious",
+        "serious",
+        "moderate",
+    )
+    findings = [
+        FindingEvidence(
+            finding_id=f"f-sum-{idx}",
+            source="axe-core",
+            rule_id="image-alt",
+            severity=severity,
+            wcag_criterion="WCAG 2.1 SC 1.1.1 Non-text Content",
+            aoda_section="AODA IASR s.14(4)",
+            target_url="https://summary.example.com",
+            target_selector=f"img.item-{idx}",
+            raw_snippet=f'<img class="item-{idx}" src="/{idx}.png">',
+            component_fingerprint=f"fp-sum-{idx}",
+            raw_scanner_sha256="c" * 64,
+        )
+        for idx, severity in enumerate(severities, start=1)
+    ]
+    reviews = [
+        FindingReview(finding_id="f-sum-1", status="PENDING"),
+        FindingReview(
+            finding_id="f-sum-2", status="APPROVED", reviewer_id="rev-1", signed_at_utc=now
+        ),
+        FindingReview(
+            finding_id="f-sum-3", status="APPROVED", reviewer_id="rev-1", signed_at_utc=now
+        ),
+        FindingReview(
+            finding_id="f-sum-4", status="EDITED", reviewer_id="rev-1", signed_at_utc=now
+        ),
+        FindingReview(
+            finding_id="f-sum-5", status="REJECTED", rejection_reason="False positive"
+        ),
+    ]
+    unsigned_bundle = AuditBundle(
+        audit_id="aud-summary-unsigned",
+        org_id="org_sum_a",
+        target_url="https://summary.example.com",
+        created_at_utc=now,
+        findings=findings,
+        reviews=reviews,
+        telemetry=AuditTelemetry(
+            scan_duration_ms=250,
+            llm_input_tokens=100,
+            llm_output_tokens=50,
+            llm_cost_usd=0.05,
+            audit_price_usd=1500.0,
+            estimated_gross_margin_pct=99.9967,
+        ),
+    )
+    store.save(unsigned_bundle)
+
+    resp = client.get("/audits/aud-summary-unsigned/summary", headers=headers_a)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["audit_id"] == "aud-summary-unsigned"
+    assert body["org_id"] == "org_sum_a"
+    assert body["target_url"] == "https://summary.example.com"
+    assert body["total_findings"] == 5
+    assert body["pending_count"] == 1
+    assert body["approved_count"] == 2
+    assert body["edited_count"] == 1
+    assert body["rejected_count"] == 1
+    assert body["critical_count"] == 2
+    assert body["serious_count"] == 2
+    assert body["signed"] is False
+    assert body["evidence_digest"] is None
+    assert body["llm_cost_usd"] == pytest.approx(0.05)
+    assert body["estimated_gross_margin_pct"] == pytest.approx(99.9967)
+
+    # Cross-tenant access must return 404
+    cross_resp = client.get("/audits/aud-summary-unsigned/summary", headers=headers_b)
+    assert cross_resp.status_code == 404
+
+    # Signed bundle reflects signed=True and evidence_digest
+    signed_reviews = [
+        FindingReview(
+            finding_id="f-sum-1", status="APPROVED", reviewer_id="rev-1", signed_at_utc=now
+        ),
+        *reviews[1:],
+    ]
+    signed_bundle = sign_bundle(
+        unsigned_bundle.model_copy(
+            update={"audit_id": "aud-summary-signed", "reviews": signed_reviews}
+        ),
+        reviewer_id="rev-1",
+        signed_at_utc=now,
+    )
+    store.save(signed_bundle)
+
+    signed_resp = client.get("/audits/aud-summary-signed/summary", headers=headers_a)
+    assert signed_resp.status_code == 200
+    signed_body = signed_resp.json()
+    assert signed_body["pending_count"] == 0
+    assert signed_body["approved_count"] == 3
+    assert signed_body["signed"] is True
+    assert signed_body["evidence_digest"] == signed_bundle.evidence_digest

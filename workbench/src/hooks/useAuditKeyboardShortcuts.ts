@@ -18,6 +18,7 @@ export interface UseAuditKeyboardShortcutsOptions {
   isEditing: boolean;
   isRejecting: boolean;
   drawerOpen: boolean;
+  helpOpen: boolean;
   canUndo: boolean;
   onNext: () => void;
   onPrev: () => void;
@@ -28,17 +29,20 @@ export interface UseAuditKeyboardShortcutsOptions {
   onCancelEdit: () => void;
   onCancelReject: () => void;
   onCloseDrawer: () => void;
+  onToggleHelp: () => void;
+  onCloseHelp: () => void;
   onUndo: () => void;
 }
 
 /**
- * Global keyboard-first triage shortcut handler (`j`, `k`, `a`, `e`, `r`, `u`, `Escape`,
- * and Cmd/Ctrl+Enter while editing).
+ * Global keyboard-first triage shortcut handler (`j`, `k`, `a`, `e`, `r`, `u`, `?`,
+ * `Escape`, and Cmd/Ctrl+Enter while editing).
  */
 export function useAuditKeyboardShortcuts({
   isEditing,
   isRejecting,
   drawerOpen,
+  helpOpen,
   canUndo,
   onNext,
   onPrev,
@@ -49,11 +53,18 @@ export function useAuditKeyboardShortcuts({
   onCancelEdit,
   onCancelReject,
   onCloseDrawer,
+  onToggleHelp,
+  onCloseHelp,
   onUndo,
 }: UseAuditKeyboardShortcutsOptions): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (helpOpen) {
+          event.preventDefault();
+          onCloseHelp();
+          return;
+        }
         if (isEditing) {
           event.preventDefault();
           onCancelEdit();
@@ -82,6 +93,16 @@ export function useAuditKeyboardShortcuts({
       }
 
       if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      if (event.key === "?") {
+        event.preventDefault();
+        onToggleHelp();
+        return;
+      }
+
+      if (helpOpen) {
         return;
       }
 
@@ -123,6 +144,7 @@ export function useAuditKeyboardShortcuts({
     isEditing,
     isRejecting,
     drawerOpen,
+    helpOpen,
     canUndo,
     onNext,
     onPrev,
@@ -133,6 +155,8 @@ export function useAuditKeyboardShortcuts({
     onCancelEdit,
     onCancelReject,
     onCloseDrawer,
+    onToggleHelp,
+    onCloseHelp,
     onUndo,
   ]);
 }

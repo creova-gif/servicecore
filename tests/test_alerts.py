@@ -15,6 +15,7 @@ from servicecore.alerts import (
     dispatch_webhook_alert,
     run_due_monitors,
     sign_webhook_payload,
+    verify_webhook_signature,
 )
 from servicecore.api import InMemoryAuditStore, create_app, mint_auth_token
 from servicecore.schemas import (
@@ -475,6 +476,51 @@ def test_run_due_monitors_passes_webhook_secret(
         )
     assert len(captured_requests) == 1
     req = captured_requests[0]
+    assert req.headers.get("x-servicecore-event") == "monitor.regression"
     assert req.headers.get("x-servicecore-signature-256") == sign_webhook_payload(
         req.content, secret
     )
+
+
+def test_verify_webhook_signature_valid_tampered_and_missing() -> None:
+    secret = "whsec_verify_secret_123"
+    raw_body = b'{"audit_id":"aud-1","new_regressions_count":2}'
+    valid_sig = sign_webhook_payload(raw_body, secret)
+
+    assert verify_webhook_signature(raw_body, valid_sig, secret) is True
+    assert verify_webhook_signature(b'{"audit_id":"aud-1","new_regressions_count":99}', valid_sig, secret) is False
+    assert verify_webhook_signature(raw_body, "sha256=" + ("0" * 64), secret) is False
+    assert verify_webhook_signature(raw_body, None, secret) is False
+    assert verify_webhook_signature(raw_body, "", secret) is False
+    assert verify_webhook_signature(raw_body, valid_sig, "") is False
+
+
+def test_dispatch_webhook_alert_includes_event_header() -> None:
+    payload = RegressionAlertPayload(
+        monitor_id="mon-evt",
+        org_id="org-evt",
+        target_url="https://example.com/evt",
+        audit_id="aud-evt",
+        baseline_audit_id="aud-base",
+        new_regressions_count=1,
+        rule_ids=["image-alt"],
+        triggered_at_utc=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        text="Regression detected",
+    )
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ok = dispatch_webhook_alert(_PUBLIC_WEBHOOK_URL, payload, signing_secret="sec", client=client)
+
+    assert ok is True
+    assert len(captured) == 1
+    assert captured[0].headers.get("x-servicecore-event") == "monitor.regression"
+    assert verify_webhook_signature(
+        captured[0].content,
+        captured[0].headers.get("x-servicecore-signature-256"),
+        "sec",
+    ) is True

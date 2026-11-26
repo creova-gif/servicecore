@@ -27,12 +27,14 @@ export interface HeaderBarProps {
   monitorsCount: number;
   monitorsOpen: boolean;
   onToggleMonitors: () => void;
+  helpOpen: boolean;
+  onToggleHelp: () => void;
 }
 
 /**
  * Sticky top header bar for the Review Workbench: mobile queue drawer trigger,
  * Live API / Demo Mode badge, audit & baseline switchers, New Audit scan form,
- * Monitors toggle, and desktop keyboard shortcut legend.
+ * Monitors toggle, Shortcuts help button, and desktop keyboard shortcut legend.
  */
 export function HeaderBar({
   queueTriggerRef,
@@ -58,6 +60,8 @@ export function HeaderBar({
   monitorsCount,
   monitorsOpen,
   onToggleMonitors,
+  helpOpen,
+  onToggleHelp,
 }: HeaderBarProps) {
   const [confirmingDeleteAudit, setConfirmingDeleteAudit] = useState(false);
 
@@ -236,6 +240,20 @@ export function HeaderBar({
             Monitors ({monitorsCount})
           </button>
         ) : null}
+
+        <button
+          type="button"
+          onClick={onToggleHelp}
+          aria-expanded={helpOpen}
+          aria-haspopup="dialog"
+          className={`min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border font-mono text-xs font-semibold transition-colors ${
+            helpOpen
+              ? "border-[var(--ink-primary)] bg-[var(--ink-primary)] text-[var(--bg-surface)]"
+              : "border-[var(--border-hairline)] bg-[var(--bg-canvas)] text-[var(--ink-primary)] hover:bg-[var(--bg-subtle)]"
+          }`}
+        >
+          Shortcuts [?]
+        </button>
 
         <div className="hidden xl:flex items-center gap-3 text-xs font-mono text-[var(--ink-muted)]">
           <span>

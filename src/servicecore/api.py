@@ -51,6 +51,7 @@ from servicecore.sarif import export_sarif
 from servicecore.scanners import ScannerBackend, validate_public_url
 from servicecore.schemas import (
     AuditBundle,
+    AuditSummary,
     DiffReport,
     EvidenceMismatchError,
     FindingReview,
@@ -411,6 +412,39 @@ def create_app(
         if bundle is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
         return bundle
+
+    @app.get("/audits/{audit_id}/summary", response_model=AuditSummary)
+    def get_audit_summary_endpoint(
+        audit_id: str,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> AuditSummary:
+        active_store: AuditStore = request.app.state.store
+        bundle = active_store.get(tenant.org_id, audit_id)
+        if bundle is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
+
+        return AuditSummary(
+            audit_id=bundle.audit_id,
+            org_id=bundle.org_id,
+            target_url=bundle.target_url,
+            created_at_utc=bundle.created_at_utc,
+            total_findings=len(bundle.findings),
+            pending_count=sum(1 for r in bundle.reviews if r.status == "PENDING"),
+            approved_count=sum(1 for r in bundle.reviews if r.status == "APPROVED"),
+            edited_count=sum(1 for r in bundle.reviews if r.status == "EDITED"),
+            rejected_count=sum(1 for r in bundle.reviews if r.status == "REJECTED"),
+            critical_count=sum(1 for f in bundle.findings if f.severity == "critical"),
+            serious_count=sum(1 for f in bundle.findings if f.severity == "serious"),
+            signed=bundle.evidence_digest is not None and bundle.signed_at_utc is not None,
+            evidence_digest=bundle.evidence_digest,
+            llm_cost_usd=bundle.telemetry.llm_cost_usd if bundle.telemetry is not None else None,
+            estimated_gross_margin_pct=(
+                bundle.telemetry.estimated_gross_margin_pct
+                if bundle.telemetry is not None
+                else None
+            ),
+        )
 
     @app.delete("/audits/{audit_id}", response_model=DeleteResponse)
     def delete_audit_endpoint(

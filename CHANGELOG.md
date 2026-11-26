@@ -60,3 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enforced a 1 MiB request body-size DoS guard in the API service.
   - Added `monitors-run-due` CLI subcommand for executing due monitors and dispatching webhook alerts.
   - Added two-click inline delete confirmation for selected audits in `HeaderBar` and recurring monitors in `MonitorsPanel`.
+- **Wave 13 — Executive Audit Summary Endpoint, Webhook Signature Verifier, Queue Search & Shortcuts Help:**
+  - Added `GET /audits/{audit_id}/summary` returning lightweight executive counts without full findings payloads.
+  - Added `verify_webhook_signature` helper (`src/servicecore/alerts.py`) for validating `X-ServiceCore-Signature-256` and `X-ServiceCore-Event` webhook deliveries.
+  - Added Workbench Queue search filtering and `?` keyboard shortcuts help dialog.

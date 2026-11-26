@@ -23,8 +23,8 @@ ServiceCore is an AI-native compliance delivery platform for **AODA / WCAG 2.2 W
 - **Evidence-Bound Claude Synthesis (Wave 1):** `ClaudeSynthesizer` generates `RemediationPatch` payloads (`html_diff` or `pdf_tag_action`) with deterministic template fallback when no API key is configured, and `validate_patch_binding` rejects any selector, rule, or unsafe HTML drift.
 - **SHA-256 Export Gate (Waves 1–3):** `sign_bundle` and `verify_bundle` require every non-rejected finding to be `APPROVED` or `EDITED` before computing the canonical SHA-256 `evidence_digest`.
 - **Certified PDF, HTML, CSV, SARIF 2.1.0 & GitHub Issues (Waves 1–10):** Export signed bundles to WeasyPrint Certified PDF, HTML reports, formula-safe CSV (`GET /audits/{audit_id}/export/csv`), SARIF `2.1.0` (`src/servicecore/sarif.py`, `GET /audits/{audit_id}/export/sarif`) for GitHub Code Scanning, or publish directly to GitHub Issues (`src/servicecore/github_publisher.py`).
-- **Recurring Monitors, Observability & Webhook Alerts (Waves 5–10):** `MonitorSchedule` persistence, `/monitors` lifecycle endpoints (`POST`, `GET`, `PATCH / DELETE /monitors/{monitor_id}`, `POST /monitors/{monitor_id}/run`), due-monitor scheduler loop, `GET /metrics` observability probe, baseline regression diffing (`+N new`, `-N resolved`, `N persisting`, `N reopened`), and SSRF-safe signed webhook alerts (`src/servicecore/alerts.py`).
-- **Next.js Review Workbench (Waves 2–10):** Keyboard-first triage UI (`j`/`k`/`a`/`r`/`e` shortcuts, `< 1024px` responsive drawer, `44x44px` touch targets), inline GitHub publishing, Recurring Monitors panel, `"Download Bundle JSON"`, `"Download CSV"`, and SARIF download actions, plus Cost & Margin telemetry footer.
+- **Recurring Monitors, Observability & Webhook Alerts (Waves 5–13):** `MonitorSchedule` persistence, `/monitors` lifecycle endpoints (`POST`, `GET`, `PATCH / DELETE /monitors/{monitor_id}`, `POST /monitors/{monitor_id}/run`), due-monitor scheduler loop, `GET /metrics` observability probe, baseline regression diffing (`+N new`, `-N resolved`, `N persisting`, `N reopened`), and SSRF-safe signed webhook alerts (`src/servicecore/alerts.py`, `verify_webhook_signature` with `X-ServiceCore-Signature-256` / `X-ServiceCore-Event`).
+- **Next.js Review Workbench (Waves 2–13):** Keyboard-first triage UI (`j`/`k`/`a`/`r`/`e` shortcuts, `?` keyboard shortcuts dialog, Queue search filtering, `< 1024px` responsive drawer, `44x44px` touch targets), inline GitHub publishing, Recurring Monitors panel, `"Download Bundle JSON"`, `"Download CSV"`, and SARIF download actions, plus Cost & Margin telemetry footer.
 
 ## Architecture
 
@@ -72,7 +72,7 @@ uv pip install --python .venv/bin/python ".[dev]"
 SERVICECORE_DEV_MODE=1 .venv/bin/uvicorn servicecore.api:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-Health & observability probes: `GET /healthz` (liveness), `GET /readyz` (SQLite readiness), and `GET /metrics`. Key API endpoints include `GET /audits/{audit_id}/export/csv` (formula-safe CSV export) and `PATCH / DELETE /monitors/{monitor_id}` (monitor lifecycle management).
+Health & observability probes: `GET /healthz` (liveness), `GET /readyz` (SQLite readiness), and `GET /metrics`. Key API endpoints include `GET /audits/{audit_id}/summary` (lightweight executive counts), `GET /audits/{audit_id}/export/csv` (formula-safe CSV export), and `PATCH / DELETE /monitors/{monitor_id}` (monitor lifecycle management).
 
 ### 4. Next.js Review Workbench
 ```bash
@@ -121,7 +121,7 @@ Observed locally on the 5 deterministic SMB web/PDF fixtures in `evals/corpus.py
 | `unverified_claims` | `0` |
 | `total_duration_ms` | `317` |
 
-Full test suite: **96+ pytest tests** (`.venv/bin/pytest -q`) and **20+ Workbench unit tests** (`cd workbench && npm test`).
+Full test suite: **109+ pytest tests** (`.venv/bin/pytest -q`) and **20+ Workbench unit tests** (`cd workbench && npm test`).
 
 ## Contributing & License
 

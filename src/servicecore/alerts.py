@@ -30,6 +30,7 @@ __all__ = [
     "dispatch_webhook_alert",
     "run_due_monitors",
     "sign_webhook_payload",
+    "verify_webhook_signature",
 ]
 
 
@@ -90,6 +91,18 @@ def sign_webhook_payload(raw_body: bytes, secret: str) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
 
+def verify_webhook_signature(
+    raw_body: bytes,
+    signature_header: str | None,
+    secret: str,
+) -> bool:
+    """Verify an incoming X-ServiceCore-Signature-256 header in constant time."""
+    if not signature_header or not secret:
+        return False
+    expected = sign_webhook_payload(raw_body, secret)
+    return hmac.compare_digest(signature_header, expected)
+
+
 def dispatch_webhook_alert(
     webhook_url: str,
     payload: RegressionAlertPayload,
@@ -103,7 +116,10 @@ def dispatch_webhook_alert(
         payload.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
     secret = signing_secret if signing_secret is not None else os.environ.get("SERVICECORE_WEBHOOK_SECRET")
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "X-ServiceCore-Event": "monitor.regression",
+    }
     if secret:
         headers["X-ServiceCore-Signature-256"] = sign_webhook_payload(body_bytes, secret)
     if client is not None:

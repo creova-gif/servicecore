@@ -97,6 +97,8 @@ export interface QueuePanelProps {
   progressPct: number;
   filter: QueueFilter;
   onFilterChange: (filter: QueueFilter) => void;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
   viewState: WorkbenchViewState;
   filteredFindings: FindingEvidence[];
   reviewById: Map<string, FindingReview>;
@@ -107,14 +109,16 @@ export interface QueuePanelProps {
 }
 
 /**
- * Triage queue panel displaying signing progress, status filter pills, and
- * selectable findings for both the desktop sidebar and mobile drawer.
+ * Triage queue panel displaying signing progress, status filter pills, search input,
+ * and selectable findings for both the desktop sidebar and mobile drawer.
  */
 export function QueuePanel({
   counts,
   progressPct,
   filter,
   onFilterChange,
+  searchQuery,
+  onSearchQueryChange,
   viewState,
   filteredFindings,
   reviewById,
@@ -199,6 +203,27 @@ export function QueuePanel({
             </button>
           );
         })}
+      </div>
+
+      {/* Search input */}
+      <div className="flex items-center gap-1.5 border-b border-[var(--border-hairline)] px-4 py-2">
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => onSearchQueryChange(e.target.value)}
+          placeholder="Search rule, WCAG, selector, engine..."
+          aria-label="Search findings by rule, WCAG, selector, or engine"
+          className="min-h-[44px] lg:min-h-[28px] w-full rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2.5 py-1 font-mono text-xs text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)]"
+        />
+        {searchQuery ? (
+          <button
+            type="button"
+            onClick={() => onSearchQueryChange("")}
+            className="min-h-[44px] lg:min-h-[28px] shrink-0 rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 font-mono text-xs text-[var(--ink-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--ink-primary)]"
+          >
+            Clear
+          </button>
+        ) : null}
       </div>
 
       {/* Queue list */}
