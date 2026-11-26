@@ -45,6 +45,10 @@ class AuditStore(Protocol):
         """List MonitorSchedules belonging to org_id with pagination."""
         ...
 
+    def delete_monitor(self, org_id: str, monitor_id: str) -> bool:
+        """Delete a MonitorSchedule strictly scoped to org_id; return True if deleted."""
+        ...
+
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""
         ...
@@ -87,6 +91,9 @@ class InMemoryAuditStore:
         ]
         return items[offset : offset + limit]
 
+    def delete_monitor(self, org_id: str, monitor_id: str) -> bool:
+        return self._monitors.pop((org_id, monitor_id), None) is not None
+
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""
         return {
@@ -101,7 +108,7 @@ class SQLiteAuditStore:
 
     def __init__(self, db_path: str | os.PathLike[str]) -> None:
         self._db_path = os.fspath(db_path)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._memory_conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
             self._memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
@@ -288,6 +295,20 @@ class SQLiteAuditStore:
             finally:
                 self._close_if_ephemeral(conn)
         return [MonitorSchedule.model_validate_json(row[0]) for row in rows]
+
+    def delete_monitor(self, org_id: str, monitor_id: str) -> bool:
+        """Delete a MonitorSchedule strictly scoped to org_id; return True if deleted."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "DELETE FROM monitors WHERE org_id = ? AND monitor_id = ?",
+                        (org_id, monitor_id),
+                    )
+                    return cursor.rowcount > 0
+            finally:
+                self._close_if_ephemeral(conn)
 
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""

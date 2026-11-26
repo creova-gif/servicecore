@@ -34,3 +34,14 @@
 - [ ] Add background monitor scheduler loop (`asyncio` / Cloud Scheduler trigger) to automatically execute due `MonitorSchedule` jobs on cadence
 - [ ] Add signed webhook / Slack / email regression alert delivery when a scheduled monitor run detects `new_regressions`
 - [ ] Add GitHub Actions SARIF upload workflow (`github/codeql-action/upload-sarif`) consuming `servicecore` SARIF 2.1.0 output for PR Code Scanning annotations
+
+## Wave 8–9: Enterprise Hardening, Pagination, Metrics & Modularity
+- [x] Enable SQLite WAL mode with busy timeout and foreign-key enforcement for concurrent persistence safety
+- [x] Add token `exp` TTL validation, security response headers, `X-Request-ID` propagation, structured JSON logging, and sliding-window rate limiting
+- [x] Add `/readyz` readiness and `GET /metrics` observability probes alongside paginated `/audits` and `/monitors` list endpoints
+- [x] Harden multi-page crawler with URL canonicalization and crawl budget guards, decompose Workbench UI into modular components, and add `container-build-validation` CI job
+
+## Wave 10: Monitor Lifecycle CRUD, CSV Export & Keyboard Hook Extraction
+- [x] Add `PATCH /monitors/{monitor_id}` and `DELETE /monitors/{monitor_id}` lifecycle CRUD endpoints and Workbench monitor controls
+- [x] Add formula-safe CSV export (`GET /audits/{audit_id}/export/csv`) and Workbench `"Download Bundle JSON"` / `"Download CSV"` export actions
+- [x] Extract Workbench keyboard triage shortcuts into a dedicated hook with expanded unit test coverage

@@ -32,6 +32,8 @@ export interface DecisionCanvasProps {
   onDownloadPdf: () => void;
   isDownloadingSarif: boolean;
   onDownloadSarif: () => void;
+  isDownloadingCsv: boolean;
+  onDownloadCsv: () => void;
   onDownloadBundleJson: () => void;
   hasHtmlReport: boolean;
   onDownloadHtmlReport: () => void;
@@ -98,6 +100,8 @@ export function DecisionCanvas({
   onDownloadPdf,
   isDownloadingSarif,
   onDownloadSarif,
+  isDownloadingCsv,
+  onDownloadCsv,
   onDownloadBundleJson,
   hasHtmlReport,
   onDownloadHtmlReport,
@@ -268,6 +272,14 @@ export function DecisionCanvas({
                           {isDownloadingSarif
                             ? "Downloading SARIF..."
                             : "Download SARIF 2.1.0"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onDownloadCsv}
+                          disabled={isDownloadingCsv}
+                          className="min-h-[44px] lg:min-h-[32px] px-2.5 rounded border border-[var(--accent-verify)] bg-[var(--bg-surface)] text-xs font-semibold text-[var(--accent-verify)] hover:bg-emerald-100 disabled:opacity-50"
+                        >
+                          {isDownloadingCsv ? "Downloading CSV..." : "Download CSV"}
                         </button>
                       </>
                     ) : null}

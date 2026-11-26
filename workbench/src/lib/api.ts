@@ -357,3 +357,62 @@ export async function exportAuditSarif(
     },
   );
 }
+
+/**
+ * Export an audit's findings and review decisions as CSV text.
+ */
+export async function exportAuditCsv(
+  auditId: string,
+  token: string,
+): Promise<string> {
+  const res = await fetch(
+    `${getApiBaseUrl()}/audits/${encodeURIComponent(auditId)}/export/csv`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  if (!res.ok) {
+    const detail = await parseErrorDetail(res);
+    throw new ApiError(res.status, detail);
+  }
+
+  return res.text();
+}
+
+/**
+ * Update a recurring MonitorSchedule (e.g. pause/resume or adjust cadence).
+ */
+export async function updateMonitor(
+  monitorId: string,
+  updates: { enabled?: boolean; cadence_hours?: number; crawl?: boolean },
+  token: string,
+): Promise<MonitorSchedule> {
+  return requestJson<MonitorSchedule>(
+    `/monitors/${encodeURIComponent(monitorId)}`,
+    {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(updates),
+    },
+  );
+}
+
+/**
+ * Delete a recurring MonitorSchedule by ID.
+ */
+export async function deleteMonitor(
+  monitorId: string,
+  token: string,
+): Promise<{ deleted: boolean }> {
+  return requestJson<{ deleted: boolean }>(
+    `/monitors/${encodeURIComponent(monitorId)}`,
+    {
+      method: "DELETE",
+      token,
+    },
+  );
+}

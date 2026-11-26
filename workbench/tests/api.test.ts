@@ -5,7 +5,9 @@ import {
   bootstrapDevToken,
   createAudit,
   createMonitor,
+  deleteMonitor,
   exportAudit,
+  exportAuditCsv,
   exportAuditPdf,
   exportAuditSarif,
   fetchAuditDiff,
@@ -16,6 +18,7 @@ import {
   publishAuditToGitHub,
   runDueMonitors,
   runMonitor,
+  updateMonitor,
 } from "../src/lib/api";
 import type {
   AuditBundle,
@@ -256,6 +259,46 @@ describe("audit API client functions", () => {
     assert.equal(headers.get("Authorization"), "Bearer tok_sarif");
   });
 
+  it("exportAuditCsv sends GET /audits/:id/export/csv and returns CSV text", async () => {
+    const csvBody = "finding_id,rule_id,status\nf_1,image-alt,APPROVED\n";
+    const calls = mockFetch(
+      () =>
+        new Response(csvBody, {
+          status: 200,
+          headers: { "Content-Type": "text/csv" },
+        }),
+    );
+
+    const res = await exportAuditCsv("aud/1", "tok_csv");
+    assert.equal(res, csvBody);
+    assert.equal(
+      calls[0].url,
+      "http://localhost:8000/audits/aud%2F1/export/csv",
+    );
+    assert.equal(calls[0].init?.method, "GET");
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_csv");
+  });
+
+  it("exportAuditCsv throws ApiError on non-2xx response", async () => {
+    mockFetch(() =>
+      Response.json(
+        { detail: "Audit not found" },
+        { status: 404, statusText: "Not Found" },
+      ),
+    );
+
+    await assert.rejects(
+      () => exportAuditCsv("aud_missing", "tok_csv"),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal(err.status, 404);
+        assert.equal(err.detail, "Audit not found");
+        return true;
+      },
+    );
+  });
+
   it("fetchAuditDiff sends GET /audits/:id/diff?baseline_id=... with bearer token", async () => {
     const report: DiffReport = {
       baseline_audit_id: "aud/base",
@@ -449,6 +492,45 @@ describe("monitor API client functions", () => {
     );
     const headers1 = new Headers(calls[1].init?.headers);
     assert.equal(headers1.get("Authorization"), "Bearer tok_due_2");
+  });
+
+  it("updateMonitor sends PATCH /monitors/:id with JSON updates and bearer token", async () => {
+    const updated = makeMonitor({
+      monitor_id: "mon/1",
+      enabled: false,
+      cadence_hours: 48,
+      crawl: true,
+    });
+    const calls = mockFetch(() => Response.json(updated, { status: 200 }));
+
+    const res = await updateMonitor(
+      "mon/1",
+      { enabled: false, cadence_hours: 48, crawl: true },
+      "tok_mon_upd",
+    );
+    assert.deepEqual(res, updated);
+    assert.equal(calls[0].url, "http://localhost:8000/monitors/mon%2F1");
+    assert.equal(calls[0].init?.method, "PATCH");
+    assert.equal(
+      calls[0].init?.body,
+      JSON.stringify({ enabled: false, cadence_hours: 48, crawl: true }),
+    );
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_mon_upd");
+    assert.equal(headers.get("Content-Type"), "application/json");
+  });
+
+  it("deleteMonitor sends DELETE /monitors/:id with bearer token", async () => {
+    const calls = mockFetch(() =>
+      Response.json({ deleted: true }, { status: 200 }),
+    );
+
+    const res = await deleteMonitor("mon/1", "tok_mon_del");
+    assert.deepEqual(res, { deleted: true });
+    assert.equal(calls[0].url, "http://localhost:8000/monitors/mon%2F1");
+    assert.equal(calls[0].init?.method, "DELETE");
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_mon_del");
   });
 });
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import html
+import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ __all__ = [
     "canonical_evidence_json",
     "compute_evidence_digest",
     "diff_bundles",
+    "export_csv",
     "export_github_issues",
     "export_pdf",
     "render_report_html",
@@ -372,3 +375,63 @@ def export_pdf(
 
     weasyprint.HTML(string=report_html).write_pdf(output_path)
     return output_path
+
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_CSV_COLUMNS = (
+    "finding_id",
+    "rule_id",
+    "severity",
+    "wcag_criterion",
+    "aoda_section",
+    "review_status",
+    "source",
+    "target_url",
+    "target_selector",
+    "component_fingerprint",
+    "raw_scanner_sha256",
+    "evidence_digest",
+)
+
+
+def _sanitize_csv_cell(value: str) -> str:
+    """Prefix formula-triggering cells with an apostrophe to prevent CSV formula injection."""
+    if value.startswith(_CSV_FORMULA_PREFIXES) or value.lstrip().startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
+def export_csv(bundle: AuditBundle) -> str:
+    """Export verified, non-rejected audit findings as RFC 4180 CSV."""
+    ok, reason = verify_bundle(bundle)
+    if not ok:
+        raise UnsignedFindingError(reason)
+
+    reviews_by_id: dict[str, FindingReview] = {r.finding_id: r for r in bundle.reviews}
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(_CSV_COLUMNS)
+
+    digest = bundle.evidence_digest or ""
+    for finding in bundle.findings:
+        review = reviews_by_id.get(finding.finding_id)
+        review_status = review.status if review is not None else "PENDING"
+        if review_status == "REJECTED":
+            continue
+        row = (
+            finding.finding_id,
+            finding.rule_id,
+            finding.severity,
+            finding.wcag_criterion,
+            finding.aoda_section,
+            review_status,
+            finding.source,
+            finding.target_url,
+            finding.target_selector,
+            finding.component_fingerprint,
+            finding.raw_scanner_sha256,
+            digest,
+        )
+        writer.writerow([_sanitize_csv_cell(cell) for cell in row])
+
+    return buf.getvalue()

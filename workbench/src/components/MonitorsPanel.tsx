@@ -17,8 +17,12 @@ export interface MonitorsPanelProps {
   onDueWebhookUrlChange: (value: string) => void;
   isRunningDueMonitors: boolean;
   runningMonitorId: string | null;
+  updatingMonitorId: string | null;
+  deletingMonitorId: string | null;
   onRunDueMonitors: () => void;
   onRunMonitor: (monitor: MonitorSchedule) => void;
+  onToggleMonitor: (monitor: MonitorSchedule) => void;
+  onDeleteMonitor: (monitor: MonitorSchedule) => void;
   onClose: () => void;
 }
 
@@ -40,8 +44,12 @@ export function MonitorsPanel({
   onDueWebhookUrlChange,
   isRunningDueMonitors,
   runningMonitorId,
+  updatingMonitorId,
+  deletingMonitorId,
   onRunDueMonitors,
   onRunMonitor,
+  onToggleMonitor,
+  onDeleteMonitor,
   onClose,
 }: MonitorsPanelProps) {
   return (
@@ -159,6 +167,12 @@ export function MonitorsPanel({
           <ul className="divide-y divide-[var(--border-hairline)]">
             {monitors.map((m) => {
               const isRunning = runningMonitorId === m.monitor_id;
+              const isUpdating = updatingMonitorId === m.monitor_id;
+              const isDeleting = deletingMonitorId === m.monitor_id;
+              const isBusy =
+                runningMonitorId !== null ||
+                updatingMonitorId !== null ||
+                deletingMonitorId !== null;
               return (
                 <li
                   key={m.monitor_id}
@@ -177,6 +191,11 @@ export function MonitorsPanel({
                           Crawl
                         </span>
                       ) : null}
+                      {!m.enabled ? (
+                        <span className="rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--ink-muted)]">
+                          Paused
+                        </span>
+                      ) : null}
                     </div>
                     <p className="font-mono text-[11px] text-[var(--ink-muted)]">
                       {m.last_run_at_utc
@@ -187,14 +206,38 @@ export function MonitorsPanel({
                         : ""}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    disabled={runningMonitorId !== null}
-                    onClick={() => onRunMonitor(m)}
-                    className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-verify)] bg-emerald-50 font-mono text-[11px] font-semibold text-[var(--accent-verify)] hover:bg-emerald-100 disabled:opacity-40"
-                  >
-                    {isRunning ? "Running..." : "Run Now"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onToggleMonitor(m)}
+                      className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] font-mono text-[11px] font-semibold text-[var(--ink-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+                    >
+                      {isUpdating
+                        ? m.enabled
+                          ? "Pausing..."
+                          : "Resuming..."
+                        : m.enabled
+                          ? "Pause"
+                          : "Resume"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onDeleteMonitor(m)}
+                      className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-[11px] font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
+                    >
+                      {isDeleting ? "Deleting..." : "Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onRunMonitor(m)}
+                      className="min-h-[44px] lg:min-h-[28px] px-3 py-1 rounded border border-[var(--accent-verify)] bg-emerald-50 font-mono text-[11px] font-semibold text-[var(--accent-verify)] hover:bg-emerald-100 disabled:opacity-40"
+                    >
+                      {isRunning ? "Running..." : "Run Now"}
+                    </button>
+                  </div>
                 </li>
               );
             })}

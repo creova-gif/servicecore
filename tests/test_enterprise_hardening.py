@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +13,14 @@ from fastapi.testclient import TestClient
 import servicecore.api as api_mod
 import servicecore.auth as auth_mod
 from servicecore.api import create_app, mint_auth_token
-from servicecore.schemas import FindingEvidence, RemediationPatch
+from servicecore.exporter import export_csv, sign_bundle
+from servicecore.schemas import (
+    AuditBundle,
+    FindingEvidence,
+    FindingReview,
+    RemediationPatch,
+    UnsignedFindingError,
+)
 from servicecore.store import SQLiteAuditStore
 
 _AUTH_SECRET = "enterprise-hardening-test-secret-32b"
@@ -286,3 +296,184 @@ def test_metrics_endpoint_returns_live_counts_and_uptime() -> None:
     assert body["total_monitors"] == 1
     assert body["processed_stripe_events"] == 0
     assert body["uptime_seconds"] >= 0.0
+
+
+def test_patch_and_delete_monitor_with_tenant_isolation() -> None:
+    client = _make_client()
+    org_a_headers = {
+        "Authorization": f"Bearer {mint_auth_token(org_id='org_a', sub='a@example.com', secret=_AUTH_SECRET)}"
+    }
+    org_b_headers = {
+        "Authorization": f"Bearer {mint_auth_token(org_id='org_b', sub='b@example.com', secret=_AUTH_SECRET)}"
+    }
+
+    created = client.post(
+        "/monitors",
+        json={"target_url": "https://mon.example.com", "cadence_hours": 24, "crawl": False},
+        headers=org_a_headers,
+    )
+    assert created.status_code == 201
+    monitor_id = created.json()["monitor_id"]
+
+    # Cross-tenant PATCH and DELETE must return 404
+    assert (
+        client.patch(
+            f"/monitors/{monitor_id}",
+            json={"enabled": False},
+            headers=org_b_headers,
+        ).status_code
+        == 404
+    )
+    assert client.delete(f"/monitors/{monitor_id}", headers=org_b_headers).status_code == 404
+
+    # Same-tenant PATCH updates fields
+    patched = client.patch(
+        f"/monitors/{monitor_id}",
+        json={"enabled": False, "cadence_hours": 12, "crawl": True},
+        headers=org_a_headers,
+    )
+    assert patched.status_code == 200
+    patched_body = patched.json()
+    assert patched_body["enabled"] is False
+    assert patched_body["cadence_hours"] == 12
+    assert patched_body["crawl"] is True
+
+    # Same-tenant DELETE succeeds and removes monitor
+    deleted = client.delete(f"/monitors/{monitor_id}", headers=org_a_headers)
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True}
+    assert client.delete(f"/monitors/{monitor_id}", headers=org_a_headers).status_code == 404
+    assert client.get("/monitors", headers=org_a_headers).json() == []
+
+
+def test_export_csv_escapes_formula_injection_and_skips_rejected() -> None:
+    ts = datetime(2026, 11, 26, 12, 0, 0, tzinfo=UTC)
+    findings = [
+        FindingEvidence(
+            finding_id="f-inject-eq",
+            source="axe-core",
+            rule_id="=CMD|'/C calc'!A0",
+            severity="critical",
+            wcag_criterion="+SUM(1,1)",
+            aoda_section="-2+3",
+            target_url="https://example.com/@admin",
+            target_selector="@SUM(1,2)",
+            raw_snippet="<img>",
+            component_fingerprint="\tcmd",
+            raw_scanner_sha256="a" * 64,
+            description="\rpayload",
+        ),
+        FindingEvidence(
+            finding_id="f-inject-ws",
+            source="axe-core",
+            rule_id="  =HYPERLINK(\"https://evil.example\")",
+            severity="serious",
+            wcag_criterion="WCAG 2.1 SC 1.1.1",
+            aoda_section="AODA IASR s.14(4)",
+            target_url="https://example.com",
+            target_selector="\r\nimg.hero",
+            raw_snippet="<img>",
+            component_fingerprint="fp-ws",
+            raw_scanner_sha256="c" * 64,
+        ),
+        FindingEvidence(
+            finding_id="f-rejected",
+            source="axe-core",
+            rule_id="color-contrast",
+            severity="minor",
+            wcag_criterion="WCAG 2.1 SC 1.4.3",
+            aoda_section="AODA IASR s.14(4)",
+            target_url="https://example.com",
+            target_selector="p.muted",
+            raw_snippet="<p>",
+            component_fingerprint="fp-rejected",
+            raw_scanner_sha256="d" * 64,
+        ),
+    ]
+    reviews = [
+        FindingReview(
+            finding_id="f-inject-eq",
+            status="APPROVED",
+            reviewer_id="rev@example.com",
+            signed_at_utc=ts,
+        ),
+        FindingReview(
+            finding_id="f-inject-ws",
+            status="EDITED",
+            reviewer_id="rev@example.com",
+            signed_at_utc=ts,
+        ),
+        FindingReview(
+            finding_id="f-rejected",
+            status="REJECTED",
+            rejection_reason="False positive",
+        ),
+    ]
+    unsigned = AuditBundle(
+        audit_id="audit-csv-1",
+        org_id="org_csv",
+        target_url="https://example.com",
+        findings=findings,
+        reviews=reviews,
+    )
+    with pytest.raises(UnsignedFindingError):
+        export_csv(unsigned)
+
+    signed = sign_bundle(unsigned, reviewer_id="rev@example.com", signed_at_utc=ts)
+    csv_text = export_csv(signed)
+    assert "\r\n" in csv_text
+
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert len(rows) == 2
+    assert [r["finding_id"] for r in rows] == ["f-inject-eq", "f-inject-ws"]
+
+    first = rows[0]
+    assert first["rule_id"] == "'=CMD|'/C calc'!A0"
+    assert first["wcag_criterion"] == "'+SUM(1,1)"
+    assert first["aoda_section"] == "'-2+3"
+    assert first["target_selector"] == "'@SUM(1,2)"
+    assert first["component_fingerprint"] == "'\tcmd"
+    assert first["target_url"] == "https://example.com/@admin"
+    assert first["evidence_digest"] == signed.evidence_digest
+
+    second = rows[1]
+    assert second["rule_id"] == "'  =HYPERLINK(\"https://evil.example\")"
+    assert second["target_selector"] == "'\r\nimg.hero"
+
+
+def test_get_audit_export_csv_endpoint_enforces_signoff() -> None:
+    client = _make_client()
+    token = mint_auth_token(org_id="org_csv_api", sub="reviewer@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = client.post("/audits", json={"target_url": "https://csv.example.com"}, headers=headers)
+    assert created.status_code == 201
+    audit_id = created.json()["audit_id"]
+    finding_id = created.json()["findings"][0]["finding_id"]
+
+    # Unsigned audit -> 409
+    unsigned_resp = client.get(f"/audits/{audit_id}/export/csv", headers=headers)
+    assert unsigned_resp.status_code == 409
+
+    # Approve finding -> 200 text/csv
+    approve = client.patch(
+        f"/audits/{audit_id}/findings/{finding_id}",
+        json={"status": "APPROVED"},
+        headers=headers,
+    )
+    assert approve.status_code == 200
+
+    csv_resp = client.get(f"/audits/{audit_id}/export/csv", headers=headers)
+    assert csv_resp.status_code == 200
+    assert csv_resp.headers["content-type"] == "text/csv; charset=utf-8"
+    assert (
+        csv_resp.headers["content-disposition"]
+        == f'attachment; filename="servicecore-{audit_id}.csv"'
+    )
+    assert len(csv_resp.headers["x-evidence-digest"]) == 64
+
+    rows = list(csv.DictReader(io.StringIO(csv_resp.text)))
+    assert len(rows) == 1
+    assert rows[0]["finding_id"] == finding_id
+    assert rows[0]["review_status"] == "APPROVED"
+    assert rows[0]["evidence_digest"] == csv_resp.headers["x-evidence-digest"]

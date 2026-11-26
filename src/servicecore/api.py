@@ -39,6 +39,7 @@ from servicecore.auth import (
 from servicecore.cli import run_audit
 from servicecore.exporter import (
     diff_bundles,
+    export_csv,
     export_github_issues,
     render_report_html,
     sign_bundle,
@@ -65,6 +66,7 @@ __all__ = [
     "AuditStore",
     "CreateAuditRequest",
     "CreateMonitorRequest",
+    "DeleteResponse",
     "DevTokenResponse",
     "ExportResponse",
     "HealthcheckResponse",
@@ -76,6 +78,7 @@ __all__ = [
     "SQLiteAuditStore",
     "TenantContext",
     "UpdateFindingReviewRequest",
+    "UpdateMonitorRequest",
     "WebhookResponse",
     "create_app",
     "get_current_tenant",
@@ -129,6 +132,20 @@ class CreateMonitorRequest(BaseModel):
     crawl: bool = False
     max_pages: int = Field(default=5, ge=1, le=20)
     max_pdfs: int = Field(default=5, ge=0, le=20)
+
+
+class UpdateMonitorRequest(BaseModel):
+    """Request body for updating a monitoring schedule."""
+
+    enabled: bool | None = None
+    cadence_hours: int | None = Field(default=None, ge=1, le=720)
+    crawl: bool | None = None
+
+
+class DeleteResponse(BaseModel):
+    """Response payload for resource deletion."""
+
+    deleted: bool = True
 
 
 class RunDueMonitorsRequest(BaseModel):
@@ -421,6 +438,42 @@ def create_app(
         active_store: AuditStore = request.app.state.store
         return active_store.list_monitors_for_org(tenant.org_id, limit=limit, offset=offset)
 
+    @app.patch("/monitors/{monitor_id}", response_model=MonitorSchedule)
+    def update_monitor_endpoint(
+        monitor_id: str,
+        body: UpdateMonitorRequest,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> MonitorSchedule:
+        active_store: AuditStore = request.app.state.store
+        monitor = active_store.get_monitor(tenant.org_id, monitor_id)
+        if monitor is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
+
+        updates: dict[str, Any] = {}
+        if body.enabled is not None:
+            updates["enabled"] = body.enabled
+        if body.cadence_hours is not None:
+            updates["cadence_hours"] = body.cadence_hours
+        if body.crawl is not None:
+            updates["crawl"] = body.crawl
+
+        updated = monitor.model_copy(update=updates) if updates else monitor
+        if updates:
+            active_store.save_monitor(updated)
+        return updated
+
+    @app.delete("/monitors/{monitor_id}", response_model=DeleteResponse)
+    def delete_monitor_endpoint(
+        monitor_id: str,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> DeleteResponse:
+        active_store: AuditStore = request.app.state.store
+        if not active_store.delete_monitor(tenant.org_id, monitor_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
+        return DeleteResponse(deleted=True)
+
     @app.post("/monitors/{monitor_id}/run", response_model=MonitorRunResult)
     def run_monitor_endpoint(
         monitor_id: str,
@@ -668,6 +721,27 @@ def create_app(
             return export_sarif(signed_bundle)
         except UnsignedFindingError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    @app.get("/audits/{audit_id}/export/csv")
+    def export_audit_csv_endpoint(
+        audit_id: str,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> Response:
+        active_store: AuditStore = request.app.state.store
+        signed_bundle = _sign_and_verify_audit(active_store, tenant.org_id, audit_id, tenant.sub)
+        try:
+            csv_text = export_csv(signed_bundle)
+        except UnsignedFindingError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return Response(
+            content=csv_text,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="servicecore-{audit_id}.csv"',
+                "X-Evidence-Digest": signed_bundle.evidence_digest or "",
+            },
+        )
 
     @app.post("/audits/{audit_id}/publish/github", response_model=PublishGitHubResponse)
     def publish_github_endpoint(

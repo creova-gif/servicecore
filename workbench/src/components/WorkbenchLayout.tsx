@@ -5,7 +5,9 @@ import {
   bootstrapDevToken,
   createAudit,
   createMonitor,
+  deleteMonitor,
   exportAudit,
+  exportAuditCsv,
   exportAuditPdf,
   exportAuditSarif,
   fetchAuditDiff,
@@ -15,7 +17,9 @@ import {
   publishAuditToGitHub,
   runDueMonitors,
   runMonitor,
+  updateMonitor,
 } from "@/lib/api";
+import { useAuditKeyboardShortcuts } from "@/hooks/useAuditKeyboardShortcuts";
 import type {
   AuditBundle,
   DiffReport,
@@ -54,20 +58,6 @@ interface UndoSnapshot {
   previousReview: FindingReview;
   previousPatch: RemediationPatch | undefined;
   actionLabel: string;
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tagName = target.tagName;
-  if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
-    return true;
-  }
-  if (target.isContentEditable) {
-    return true;
-  }
-  return Boolean(target.closest("[data-editor]"));
 }
 
 function computeMockDigest(bundle: AuditBundle, reviews: FindingReview[]): string {
@@ -143,6 +133,7 @@ export function WorkbenchLayout({
   const [isScanning, setIsScanning] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingSarif, setIsDownloadingSarif] = useState(false);
+  const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
   const [baselineAuditId, setBaselineAuditId] = useState("");
   const [diffReport, setDiffReport] = useState<DiffReport | null>(null);
   const [isLoadingDiff, setIsLoadingDiff] = useState(false);
@@ -158,6 +149,8 @@ export function WorkbenchLayout({
   const [monitorCrawl, setMonitorCrawl] = useState(false);
   const [isCreatingMonitor, setIsCreatingMonitor] = useState(false);
   const [runningMonitorId, setRunningMonitorId] = useState<string | null>(null);
+  const [updatingMonitorId, setUpdatingMonitorId] = useState<string | null>(null);
+  const [deletingMonitorId, setDeletingMonitorId] = useState<string | null>(null);
   const [dueWebhookUrl, setDueWebhookUrl] = useState("");
   const [isRunningDueMonitors, setIsRunningDueMonitors] = useState(false);
 
@@ -870,6 +863,67 @@ export function WorkbenchLayout({
     [authToken, runningMonitorId, loadBundle],
   );
 
+  const handleToggleMonitor = useCallback(
+    async (monitor: MonitorSchedule) => {
+      if (!authToken || updatingMonitorId || deletingMonitorId) {
+        return;
+      }
+      setUpdatingMonitorId(monitor.monitor_id);
+      setApiError(null);
+      const nextEnabled = !monitor.enabled;
+      try {
+        const updated = await updateMonitor(
+          monitor.monitor_id,
+          { enabled: nextEnabled },
+          authToken,
+        );
+        setMonitors((prev) =>
+          prev.map((item) =>
+            item.monitor_id === updated.monitor_id ? updated : item,
+          ),
+        );
+        setAnnouncement(
+          `${updated.enabled ? "Resumed" : "Paused"} monitor for ${updated.target_url}.`,
+        );
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : "Failed to update monitor.";
+        setApiError(`Update monitor failed: ${message}`);
+        setAnnouncement(`Update monitor failed: ${message}`);
+      } finally {
+        setUpdatingMonitorId(null);
+      }
+    },
+    [authToken, updatingMonitorId, deletingMonitorId],
+  );
+
+  const handleDeleteMonitor = useCallback(
+    async (monitor: MonitorSchedule) => {
+      if (!authToken || deletingMonitorId || updatingMonitorId) {
+        return;
+      }
+      setDeletingMonitorId(monitor.monitor_id);
+      setApiError(null);
+      try {
+        const result = await deleteMonitor(monitor.monitor_id, authToken);
+        if (result.deleted) {
+          setMonitors((prev) =>
+            prev.filter((item) => item.monitor_id !== monitor.monitor_id),
+          );
+          setAnnouncement(`Deleted monitor for ${monitor.target_url}.`);
+        }
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : "Failed to delete monitor.";
+        setApiError(`Delete monitor failed: ${message}`);
+        setAnnouncement(`Delete monitor failed: ${message}`);
+      } finally {
+        setDeletingMonitorId(null);
+      }
+    },
+    [authToken, deletingMonitorId, updatingMonitorId],
+  );
+
   const handleRunDueMonitors = useCallback(async () => {
     if (!authToken || isRunningDueMonitors || runningMonitorId) {
       return;
@@ -1042,6 +1096,31 @@ export function WorkbenchLayout({
     }
   }, [apiMode, authToken, isServerBundle, isDownloadingSarif, bundle.audit_id]);
 
+  const handleDownloadCsv = useCallback(async () => {
+    if (apiMode !== "live" || !authToken || !isServerBundle || isDownloadingCsv) {
+      return;
+    }
+    setIsDownloadingCsv(true);
+    setApiError(null);
+    try {
+      const csv = await exportAuditCsv(bundle.audit_id, authToken);
+      const blob = new Blob([csv], {
+        type: "text/csv;charset=utf-8",
+      });
+      triggerBlobDownload(blob, `servicecore-${bundle.audit_id}.csv`);
+      setAnnouncement(
+        `Downloaded CSV report servicecore-${bundle.audit_id}.csv.`,
+      );
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to download CSV report.";
+      setApiError(`CSV download failed: ${message}`);
+      setAnnouncement(`CSV download failed: ${message}`);
+    } finally {
+      setIsDownloadingCsv(false);
+    }
+  }, [apiMode, authToken, isServerBundle, isDownloadingCsv, bundle.audit_id]);
+
   const handleClearDiff = useCallback(() => {
     setBaselineAuditId("");
     setDiffReport(null);
@@ -1086,89 +1165,33 @@ export function WorkbenchLayout({
     [apiMode, authToken, isServerBundle, bundle.audit_id],
   );
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (isEditing) {
-          event.preventDefault();
-          setIsEditing(false);
-          setAnnouncement("Exited inline editor.");
-          return;
-        }
-        if (isRejecting) {
-          event.preventDefault();
-          setIsRejecting(false);
-          setDraftRejectionReason("");
-          setAnnouncement("Cancelled rejection.");
-          return;
-        }
-        if (drawerOpen) {
-          event.preventDefault();
-          setDrawerOpen(false);
-          return;
-        }
-      }
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false);
+    setAnnouncement("Exited inline editor.");
+  }, []);
 
-      if (isEditing && (event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        handleSaveEdit();
-        return;
-      }
+  const handleCancelReject = useCallback(() => {
+    setIsRejecting(false);
+    setDraftRejectionReason("");
+    setAnnouncement("Cancelled rejection.");
+  }, []);
 
-      if (isEditableTarget(event.target)) {
-        return;
-      }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-
-      switch (event.key.toLowerCase()) {
-        case "j":
-          event.preventDefault();
-          navigateRelative(1);
-          break;
-        case "k":
-          event.preventDefault();
-          navigateRelative(-1);
-          break;
-        case "a":
-          event.preventDefault();
-          applyTriage("APPROVED");
-          break;
-        case "r":
-          event.preventDefault();
-          handleStartReject();
-          break;
-        case "e":
-          event.preventDefault();
-          handleEnterEdit();
-          break;
-        case "u":
-          if (undoSnapshot) {
-            event.preventDefault();
-            handleUndo();
-          }
-          break;
-        default:
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
+  useAuditKeyboardShortcuts({
     isEditing,
     isRejecting,
     drawerOpen,
-    handleSaveEdit,
-    navigateRelative,
-    applyTriage,
-    handleStartReject,
-    handleEnterEdit,
-    undoSnapshot,
-    handleUndo,
-  ]);
+    canUndo: Boolean(undoSnapshot),
+    onNext: () => navigateRelative(1),
+    onPrev: () => navigateRelative(-1),
+    onApprove: () => applyTriage("APPROVED"),
+    onStartReject: handleStartReject,
+    onEnterEdit: handleEnterEdit,
+    onSaveEdit: handleSaveEdit,
+    onCancelEdit: handleCancelEdit,
+    onCancelReject: handleCancelReject,
+    onCloseDrawer: () => setDrawerOpen(false),
+    onUndo: handleUndo,
+  });
 
   const handleSelectFindingFromQueue = useCallback((findingId: string) => {
     setSelectedId(findingId);
@@ -1308,9 +1331,17 @@ export function WorkbenchLayout({
               onDueWebhookUrlChange={setDueWebhookUrl}
               isRunningDueMonitors={isRunningDueMonitors}
               runningMonitorId={runningMonitorId}
+              updatingMonitorId={updatingMonitorId}
+              deletingMonitorId={deletingMonitorId}
               onRunDueMonitors={handleRunDueMonitors}
               onRunMonitor={(m) => {
                 void handleRunMonitor(m);
+              }}
+              onToggleMonitor={(m) => {
+                void handleToggleMonitor(m);
+              }}
+              onDeleteMonitor={(m) => {
+                void handleDeleteMonitor(m);
               }}
               onClose={() => setMonitorsOpen(false)}
             />
@@ -1342,6 +1373,10 @@ export function WorkbenchLayout({
             isDownloadingSarif={isDownloadingSarif}
             onDownloadSarif={() => {
               void handleDownloadSarif();
+            }}
+            isDownloadingCsv={isDownloadingCsv}
+            onDownloadCsv={() => {
+              void handleDownloadCsv();
             }}
             onDownloadBundleJson={handleDownloadBundleJson}
             hasHtmlReport={Boolean(exportArtifacts?.htmlReport)}

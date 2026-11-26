@@ -47,3 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Hardened the multi-page crawler with URL canonicalization and crawl budget guards.
   - Switched Workbench typography to offline-safe system font stacks and decomposed the UI into modular `HeaderBar`, `QueuePanel`, `MonitorsPanel`, and `DecisionCanvas` components.
   - Added `container-build-validation` CI job validating `docker compose config --quiet` and building both `servicecore-api:ci` and `servicecore-workbench:ci` images.
+- **Wave 10 — Monitor Lifecycle CRUD, Formula-Safe CSV Export & Keyboard Hook Extraction:**
+  - Added `PATCH /monitors/{monitor_id}` and `DELETE /monitors/{monitor_id}` endpoints with org-scoped persistence and Workbench monitor lifecycle controls.
+  - Added formula-safe CSV export (`GET /audits/{audit_id}/export/csv`) and Workbench `"Download Bundle JSON"` / `"Download CSV"` export actions.
+  - Extracted Workbench keyboard triage shortcuts into a dedicated hook with expanded unit test coverage.
