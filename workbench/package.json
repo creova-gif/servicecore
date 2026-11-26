@@ -11,7 +11,7 @@
     "test": "TMP=$(mktemp -d) && npx tsc --noCheck --noEmit false --outDir \"$TMP\" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck tests/api.test.ts tests/triage.test.ts && node --test \"$TMP/tests/api.test.js\" \"$TMP/tests/triage.test.js\"; EC=$?; rm -rf \"$TMP\"; exit $EC"
   },
   "dependencies": {
-    "next": "^15.1.0",
+    "next": "^16.4.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
