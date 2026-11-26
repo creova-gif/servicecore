@@ -53,3 +53,7 @@
 
 ## Wave 14: Bulk Evidence-Bound Triage, Thread-Safe InMemory Store & Focus Restoration
 - [x] Add `POST /audits/{audit_id}/findings/bulk-review` (evidence-bound bulk approval), thread-safe `InMemoryAuditStore`, Workbench `"Approve All Bound"` action, and shortcuts dialog focus restoration (Wave 14)
+
+## Wave 15–16: Chain-of-Custody Audit Events & Enterprise API Reference
+- [x] Add immutable compliance event trail (`GET /audits/{audit_id}/events`) for finding reviews, bulk reviews, certified exports, and GitHub publishing (Wave 15)
+- [x] Publish `docs/API.md` enterprise API reference, document `SERVICECORE_RATE_LIMIT_PER_MINUTE` / `SERVICECORE_ENABLE_DOCS` in `.env.example` & `README.md`, and link `docs/API.md` in `README.md` (Wave 16)

@@ -87,7 +87,10 @@ class InMemoryAuditStore:
 
     def delete_audit(self, org_id: str, audit_id: str) -> bool:
         with self._lock:
-            return self._bundles.pop((org_id, audit_id), None) is not None
+            deleted = self._bundles.pop((org_id, audit_id), None) is not None
+            if deleted:
+                self._events.pop((org_id, audit_id), None)
+            return deleted
 
     def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
         with self._lock:
@@ -271,6 +274,10 @@ class SQLiteAuditStore:
             conn = self._connect()
             try:
                 with conn:
+                    conn.execute(
+                        "DELETE FROM audit_events WHERE org_id = ? AND audit_id = ?",
+                        (org_id, audit_id),
+                    )
                     cursor = conn.execute(
                         "DELETE FROM audits WHERE org_id = ? AND audit_id = ?",
                         (org_id, audit_id),

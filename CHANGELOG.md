@@ -68,3 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `POST /audits/{audit_id}/findings/bulk-review` for evidence-bound bulk finding approval.
   - Added thread-safe locking to `InMemoryAuditStore` for concurrent access.
   - Added `"Approve All Bound"` bulk triage action and keyboard shortcuts dialog focus restoration in the Workbench.
+- **Wave 15–16 — Chain-of-Custody Audit Events & Enterprise API Reference:**
+  - Added immutable compliance audit event logging (`GET /audits/{audit_id}/events`) covering finding reviews, bulk reviews, certified exports, and GitHub issue publishing.
+  - Published enterprise API reference documentation in `docs/API.md` covering bearer authentication, all grouped endpoints, webhook signature verification, and standard error codes.
+  - Documented `SERVICECORE_RATE_LIMIT_PER_MINUTE` and `SERVICECORE_ENABLE_DOCS` in `.env.example` and `README.md`.

@@ -255,6 +255,15 @@ def _resolve_cors_origins(allow_origins: list[str] | None = None) -> list[str]:
     return parsed if parsed else list(_DEFAULT_CORS_ORIGINS)
 
 
+_OPENAPI_TAGS: list[dict[str, Any]] = [
+    {"name": "Audits", "description": "Create, inspect, diff, and manage accessibility audits."},
+    {"name": "Triage", "description": "Review and approve or reject remediation patches."},
+    {"name": "Exports", "description": "Export audit reports in JSON, PDF, SARIF, CSV, and GitHub PRs."},
+    {"name": "Monitors", "description": "Schedule and run recurring compliance monitors."},
+    {"name": "Operations", "description": "Healthcheck, readiness, metrics, and webhook endpoints."},
+]
+
+
 def create_app(
     *,
     auth_secret: str | None = None,
@@ -264,10 +273,25 @@ def create_app(
     synthesizer: ClaudeSynthesizer | None = None,
     allow_origins: list[str] | None = None,
     rate_limit_per_minute: int | None = None,
+    enable_docs: bool | None = None,
 ) -> FastAPI:
     """Build and configure the ServiceCore FastAPI application."""
     started_at = time.monotonic()
-    app = FastAPI(title="ServiceCore Compliance API", version="0.1.0")
+    resolved_docs = (
+        enable_docs
+        if enable_docs is not None
+        else (
+            os.environ.get("SERVICECORE_DEV_MODE") == "1"
+            or os.environ.get("SERVICECORE_ENABLE_DOCS") == "1"
+        )
+    )
+    app = FastAPI(
+        title="ServiceCore Compliance API",
+        version="0.1.0",
+        docs_url="/docs" if resolved_docs else None,
+        redoc_url="/redoc" if resolved_docs else None,
+        openapi_tags=_OPENAPI_TAGS,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_resolve_cors_origins(allow_origins),
@@ -335,9 +359,21 @@ def create_app(
     app.state.scanner = scanner
     app.state.synthesizer = synthesizer
     app.state.processed_stripe_events = set()
+    resolved_rate_limit = rate_limit_per_minute
+    if resolved_rate_limit is None:
+        env_rate_limit = os.environ.get("SERVICECORE_RATE_LIMIT_PER_MINUTE")
+        if env_rate_limit is not None and env_rate_limit.strip() != "":
+            try:
+                resolved_rate_limit = int(env_rate_limit)
+            except ValueError as exc:
+                raise ValueError(
+                    "SERVICECORE_RATE_LIMIT_PER_MINUTE must be a positive integer"
+                ) from exc
+    if resolved_rate_limit is not None and resolved_rate_limit <= 0:
+        raise ValueError("rate_limit_per_minute must be a positive integer")
     app.state.rate_limiter = (
-        SlidingWindowRateLimiter(rate_limit_per_minute)
-        if rate_limit_per_minute is not None
+        SlidingWindowRateLimiter(max_requests=resolved_rate_limit)
+        if resolved_rate_limit is not None
         else None
     )
 

@@ -914,3 +914,104 @@ def test_audit_trail_events_chronological_and_tenant_isolated(tmp_path: Path) ->
     # 7. Missing audit returns 404
     missing_resp = client.get("/audits/aud-does-not-exist/events", headers=headers_a)
     assert missing_resp.status_code == 404
+
+
+def test_delete_audit_cascades_events_in_memory_and_sqlite(tmp_path: Path) -> None:
+    # 1. InMemoryAuditStore
+    mem_store = InMemoryAuditStore()
+    mem_app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=mem_store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    mem_client = TestClient(mem_app)
+    token = mint_auth_token(org_id="org_cascade", sub="alice@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_resp = mem_client.post(
+        "/audits", headers=headers, json={"target_url": "https://cascade.example.com"}
+    )
+    assert create_resp.status_code == 201
+    mem_audit_id = create_resp.json()["audit_id"]
+    assert len(mem_store.list_events("org_cascade", mem_audit_id)) == 1
+
+    del_resp = mem_client.delete(f"/audits/{mem_audit_id}", headers=headers)
+    assert del_resp.status_code == 200
+    assert mem_store.list_events("org_cascade", mem_audit_id) == []
+    assert ("org_cascade", mem_audit_id) not in mem_store._events
+
+    # 2. SQLiteAuditStore
+    sqlite_store = SQLiteAuditStore(tmp_path / "cascade.db")
+    sqlite_app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=sqlite_store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    sqlite_client = TestClient(sqlite_app)
+
+    create_resp_2 = sqlite_client.post(
+        "/audits", headers=headers, json={"target_url": "https://cascade.example.com"}
+    )
+    assert create_resp_2.status_code == 201
+    sql_audit_id = create_resp_2.json()["audit_id"]
+    assert len(sqlite_store.list_events("org_cascade", sql_audit_id)) == 1
+
+    del_resp_2 = sqlite_client.delete(f"/audits/{sql_audit_id}", headers=headers)
+    assert del_resp_2.status_code == 200
+    assert sqlite_store.list_events("org_cascade", sql_audit_id) == []
+
+    conn = sqlite_store._connect()
+    try:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE org_id = ? AND audit_id = ?",
+            ("org_cascade", sql_audit_id),
+        ).fetchone()[0]
+    finally:
+        sqlite_store._close_if_ephemeral(conn)
+    assert remaining == 0
+
+
+def test_rate_limit_from_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVICECORE_RATE_LIMIT_PER_MINUTE", "2")
+    client = _make_client()
+    token = mint_auth_token(org_id="org_env_rate", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r1 = client.post("/audits", json={"target_url": "https://example.com"}, headers=headers)
+    assert r1.status_code == 201
+
+    r2 = client.post("/monitors/run-due", json={}, headers=headers)
+    assert r2.status_code == 200
+
+    r3 = client.post("/audits", json={"target_url": "https://example.com"}, headers=headers)
+    assert r3.status_code == 429
+
+    monkeypatch.setenv("SERVICECORE_RATE_LIMIT_PER_MINUTE", "invalid")
+    with pytest.raises(ValueError, match="SERVICECORE_RATE_LIMIT_PER_MINUTE"):
+        create_app(auth_secret=_AUTH_SECRET)
+
+    monkeypatch.setenv("SERVICECORE_RATE_LIMIT_PER_MINUTE", "0")
+    with pytest.raises(ValueError, match="positive integer"):
+        create_app(auth_secret=_AUTH_SECRET)
+
+
+def test_enable_docs_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SERVICECORE_DEV_MODE", raising=False)
+    monkeypatch.delenv("SERVICECORE_ENABLE_DOCS", raising=False)
+
+    disabled_client = TestClient(create_app(auth_secret=_AUTH_SECRET, enable_docs=False))
+    assert disabled_client.get("/docs").status_code == 404
+    assert disabled_client.get("/redoc").status_code == 404
+
+    default_client = TestClient(create_app(auth_secret=_AUTH_SECRET))
+    assert default_client.get("/docs").status_code == 404
+
+    enabled_client = TestClient(create_app(auth_secret=_AUTH_SECRET, enable_docs=True))
+    assert enabled_client.get("/docs").status_code == 200
+    assert enabled_client.get("/redoc").status_code == 200
+
+    monkeypatch.setenv("SERVICECORE_ENABLE_DOCS", "1")
+    env_enabled_client = TestClient(create_app(auth_secret=_AUTH_SECRET))
+    assert env_enabled_client.get("/docs").status_code == 200

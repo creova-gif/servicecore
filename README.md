@@ -13,6 +13,7 @@
 ServiceCore is an AI-native compliance delivery platform for **AODA / WCAG 2.2 Web and PDF/UA accessibility audits**. Every finding is captured deterministically, bound to cryptographic evidence, reviewed by a human engineer, and exported as a SHA-256 signed audit bundle.
 
 - **Spec & Review Ledger:** [PROJECT_SPEC.md](PROJECT_SPEC.md)
+- **API Reference:** [docs/API.md](docs/API.md)
 - **Design Doc & UI Spec:** [docs/designs/servicecore-platform.md](docs/designs/servicecore-platform.md), [DESIGN.md](DESIGN.md)
 - **Standards & Security:** [AGENTS.md](AGENTS.md), [SECURITY.md](SECURITY.md), [docs/adr/001-dual-engine-evidence-architecture.md](docs/adr/001-dual-engine-evidence-architecture.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 
@@ -103,6 +104,8 @@ Copy [`.env.example`](.env.example) (and [`workbench/.env.example`](workbench/.e
 | `SERVICECORE_DB_PATH` | SQLite database path for `SQLiteAuditStore` | `/data/servicecore.sqlite` |
 | `SERVICECORE_DEV_MODE` | Set to `1` to allow local dev token minting and in-memory fallback | `0` (`1` in `docker-compose.yml`) |
 | `SERVICECORE_CORS_ORIGINS` | Comma-separated allowed CORS origins for the FastAPI backend | `http://localhost:3000,http://localhost:3105` |
+| `SERVICECORE_RATE_LIMIT_PER_MINUTE` | Optional per-tenant sliding-window rate limit (requests/min) for scan endpoints | `60` |
+| `SERVICECORE_ENABLE_DOCS` | Set to `1` to expose interactive OpenAPI docs (`/docs`, `/redoc`); `0` to disable | `1` |
 | `SERVICECORE_WEBHOOK_SECRET` | HMAC-SHA256 signing secret for outbound webhook alerts (`X-ServiceCore-Signature-256`) | `""` |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for `POST /webhooks/stripe` signature verification | `""` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for `ClaudeSynthesizer` (uses deterministic templates if unset) | `""` |
