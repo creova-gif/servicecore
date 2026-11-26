@@ -27,6 +27,10 @@ class AuditStore(Protocol):
         """Fetch an AuditBundle strictly scoped to org_id, or None if not found."""
         ...
 
+    def delete_audit(self, org_id: str, audit_id: str) -> bool:
+        """Delete an AuditBundle strictly scoped to org_id; return True if deleted."""
+        ...
+
     def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
         """List AuditBundles belonging to org_id with pagination."""
         ...
@@ -66,6 +70,9 @@ class InMemoryAuditStore:
 
     def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
         return self._bundles.get((org_id, audit_id))
+
+    def delete_audit(self, org_id: str, audit_id: str) -> bool:
+        return self._bundles.pop((org_id, audit_id), None) is not None
 
     def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
         items = [
@@ -203,6 +210,20 @@ class SQLiteAuditStore:
         if row is None:
             return None
         return AuditBundle.model_validate_json(row[0])
+
+    def delete_audit(self, org_id: str, audit_id: str) -> bool:
+        """Delete an AuditBundle strictly scoped to org_id; return True if deleted."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "DELETE FROM audits WHERE org_id = ? AND audit_id = ?",
+                        (org_id, audit_id),
+                    )
+                    return cursor.rowcount > 0
+            finally:
+                self._close_if_ephemeral(conn)
 
     def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
         """List AuditBundles belonging to org_id, newest updated first, with pagination."""

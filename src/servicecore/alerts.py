@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -25,6 +29,7 @@ __all__ = [
     "build_regression_alert",
     "dispatch_webhook_alert",
     "run_due_monitors",
+    "sign_webhook_payload",
 ]
 
 
@@ -80,20 +85,32 @@ def build_regression_alert(
     )
 
 
+def sign_webhook_payload(raw_body: bytes, secret: str) -> str:
+    """Compute an HMAC-SHA256 signature header value for a raw webhook request body."""
+    return "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
 def dispatch_webhook_alert(
     webhook_url: str,
     payload: RegressionAlertPayload,
     *,
+    signing_secret: str | None = None,
     client: httpx.Client | None = None,
 ) -> bool:
     """Validate webhook_url against SSRF and POST the alert payload, returning True on 2xx."""
     validated_url = validate_public_url(webhook_url)
-    body = payload.model_dump(mode="json")
+    body_bytes = json.dumps(
+        payload.model_dump(mode="json"), separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    secret = signing_secret if signing_secret is not None else os.environ.get("SERVICECORE_WEBHOOK_SECRET")
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers["X-ServiceCore-Signature-256"] = sign_webhook_payload(body_bytes, secret)
     if client is not None:
-        response = client.post(validated_url, json=body)
+        response = client.post(validated_url, content=body_bytes, headers=headers)
         return bool(response.is_success)
     with httpx.Client(timeout=10.0) as managed_client:
-        response = managed_client.post(validated_url, json=body)
+        response = managed_client.post(validated_url, content=body_bytes, headers=headers)
         return bool(response.is_success)
 
 
@@ -105,6 +122,7 @@ def run_due_monitors(
     synthesizer: ClaudeSynthesizer | None = None,
     now: datetime | None = None,
     webhook_url: str | None = None,
+    webhook_secret: str | None = None,
     client: httpx.Client | None = None,
 ) -> list[MonitorRunResult]:
     """Execute all enabled monitors for org_id whose cadence has elapsed."""
@@ -154,7 +172,12 @@ def run_due_monitors(
                 scoped_bundle,
                 now=current_now,
             )
-            dispatch_webhook_alert(webhook_url, alert, client=client)
+            dispatch_webhook_alert(
+                webhook_url,
+                alert,
+                signing_secret=webhook_secret,
+                client=client,
+            )
 
         results.append(MonitorRunResult(monitor=updated_monitor, audit=scoped_bundle, diff=diff))
 

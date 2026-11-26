@@ -5,6 +5,7 @@ import {
   bootstrapDevToken,
   createAudit,
   createMonitor,
+  deleteAudit,
   deleteMonitor,
   exportAudit,
   exportAuditCsv,
@@ -131,6 +132,7 @@ export function WorkbenchLayout({
   const [newAuditUrl, setNewAuditUrl] = useState("");
   const [crawlEnabled, setCrawlEnabled] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isDeletingAudit, setIsDeletingAudit] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingSarif, setIsDownloadingSarif] = useState(false);
   const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
@@ -784,6 +786,44 @@ export function WorkbenchLayout({
     [newAuditUrl, crawlEnabled, authToken, isScanning, loadBundle],
   );
 
+  const handleDeleteAudit = useCallback(
+    async (auditId: string) => {
+      if (!authToken || isDeletingAudit) {
+        return;
+      }
+      setIsDeletingAudit(true);
+      setApiError(null);
+      try {
+        const result = await deleteAudit(auditId, authToken);
+        if (result.deleted) {
+          const remainingAudits = serverAudits.filter(
+            (item) => item.audit_id !== auditId,
+          );
+          setServerAudits(remainingAudits);
+          if (remainingAudits.length > 0) {
+            loadBundle(remainingAudits[0], true);
+            setAnnouncement(
+              `Deleted audit ${auditId}. Switched to ${remainingAudits[0].audit_id}.`,
+            );
+          } else {
+            loadBundle(initialBundle, false);
+            setAnnouncement(
+              `Deleted audit ${auditId}. No server audits remaining.`,
+            );
+          }
+        }
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : "Failed to delete audit.";
+        setApiError(`Delete audit failed: ${message}`);
+        setAnnouncement(`Delete audit failed: ${message}`);
+      } finally {
+        setIsDeletingAudit(false);
+      }
+    },
+    [authToken, isDeletingAudit, serverAudits, loadBundle, initialBundle],
+  );
+
   const handleCreateMonitor = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -1225,6 +1265,10 @@ export function WorkbenchLayout({
         onSwitchAudit={(selectedAudit) => {
           loadBundle(selectedAudit, true);
           setAnnouncement(`Switched to audit ${selectedAudit.audit_id}.`);
+        }}
+        isDeletingAudit={isDeletingAudit}
+        onDeleteAudit={(id) => {
+          void handleDeleteAudit(id);
         }}
         baselineAuditId={baselineAuditId}
         isLoadingDiff={isLoadingDiff}

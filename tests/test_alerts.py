@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +14,7 @@ from servicecore.alerts import (
     build_regression_alert,
     dispatch_webhook_alert,
     run_due_monitors,
+    sign_webhook_payload,
 )
 from servicecore.api import InMemoryAuditStore, create_app, mint_auth_token
 from servicecore.schemas import (
@@ -340,3 +343,138 @@ def test_post_monitors_run_due_endpoint_and_ssrf_422() -> None:
     run_again_resp = client.post("/monitors/run-due", json={}, headers=org_a_headers)
     assert run_again_resp.status_code == 200
     assert run_again_resp.json() == []
+
+
+def test_sign_webhook_payload_and_dispatch_header_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SERVICECORE_WEBHOOK_SECRET", raising=False)
+    payload = RegressionAlertPayload(
+        monitor_id="mon-1",
+        org_id="org-a",
+        target_url="https://example.com",
+        audit_id="aud-2",
+        baseline_audit_id="aud-1",
+        new_regressions_count=1,
+        rule_ids=["image-alt"],
+        triggered_at_utc=datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+        text="1 regression detected",
+    )
+    secret = "whsec_outbound_test_secret"
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ok = dispatch_webhook_alert(
+            _PUBLIC_WEBHOOK_URL,
+            payload,
+            signing_secret=secret,
+            client=client,
+        )
+    assert ok is True
+    assert len(captured_requests) == 1
+    req = captured_requests[0]
+    assert req.headers["content-type"] == "application/json"
+    sig_header = req.headers.get("x-servicecore-signature-256")
+    assert sig_header is not None
+    expected_sig = (
+        "sha256=" + hmac.new(secret.encode("utf-8"), req.content, hashlib.sha256).hexdigest()
+    )
+    assert hmac.compare_digest(sig_header, expected_sig)
+    assert sig_header == sign_webhook_payload(req.content, secret)
+
+    # When signing_secret is None and SERVICECORE_WEBHOOK_SECRET is unset, header is omitted
+    captured_requests.clear()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ok_unsigned = dispatch_webhook_alert(_PUBLIC_WEBHOOK_URL, payload, client=client)
+    assert ok_unsigned is True
+    assert len(captured_requests) == 1
+    assert "x-servicecore-signature-256" not in captured_requests[0].headers
+
+    # Empty string signing_secret also omits the header even if env var is set
+    monkeypatch.setenv("SERVICECORE_WEBHOOK_SECRET", secret)
+    captured_requests.clear()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ok_empty = dispatch_webhook_alert(
+            _PUBLIC_WEBHOOK_URL, payload, signing_secret="", client=client
+        )
+    assert ok_empty is True
+    assert "x-servicecore-signature-256" not in captured_requests[0].headers
+
+    # Env var fallback is used when signing_secret is None
+    captured_requests.clear()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ok_env = dispatch_webhook_alert(_PUBLIC_WEBHOOK_URL, payload, client=client)
+    assert ok_env is True
+    assert captured_requests[0].headers.get("x-servicecore-signature-256") == expected_sig
+
+
+def test_run_due_monitors_passes_webhook_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SERVICECORE_WEBHOOK_SECRET", raising=False)
+    store = InMemoryAuditStore()
+    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    store.save_monitor(
+        MonitorSchedule(
+            monitor_id="mon-sig",
+            org_id="org-a",
+            target_url="https://example.com/sig",
+            cadence_hours=24,
+            last_run_at_utc=None,
+            enabled=True,
+        )
+    )
+    f1 = _make_finding(
+        finding_id="f-1",
+        rule_id="image-alt",
+        fingerprint="fp-1",
+        target_url="https://example.com/sig",
+    )
+    f2 = _make_finding(
+        finding_id="f-2",
+        rule_id="button-name",
+        fingerprint="fp-2",
+        target_url="https://example.com/sig",
+        selector="button.submit",
+    )
+    scanner = _SequenceScanner([[f1], [f1, f2]])
+    synth = _MockSynthesizer()
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(202)
+
+    secret = "monitor_secret_123"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        run_due_monitors(
+            store,
+            "org-a",
+            scanner=scanner,
+            synthesizer=synth,  # type: ignore[arg-type]
+            now=t0,
+            webhook_url=_PUBLIC_WEBHOOK_URL,
+            webhook_secret=secret,
+            client=client,
+        )
+        assert captured_requests == []
+
+        run_due_monitors(
+            store,
+            "org-a",
+            scanner=scanner,
+            synthesizer=synth,  # type: ignore[arg-type]
+            now=t0 + timedelta(hours=24),
+            webhook_url=_PUBLIC_WEBHOOK_URL,
+            webhook_secret=secret,
+            client=client,
+        )
+    assert len(captured_requests) == 1
+    req = captured_requests[0]
+    assert req.headers.get("x-servicecore-signature-256") == sign_webhook_payload(
+        req.content, secret
+    )

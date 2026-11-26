@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import csv
 import io
 import json
@@ -477,3 +478,78 @@ def test_get_audit_export_csv_endpoint_enforces_signoff() -> None:
     assert rows[0]["finding_id"] == finding_id
     assert rows[0]["review_status"] == "APPROVED"
     assert rows[0]["evidence_digest"] == csv_resp.headers["x-evidence-digest"]
+
+
+def test_sqlite_concurrent_writes_with_wal_and_rlock(tmp_path: Path) -> None:
+    store = SQLiteAuditStore(tmp_path / "concurrent.db")
+
+    def _save_one(idx: int) -> str:
+        audit_id = f"audit-concurrent-{idx:02d}"
+        bundle = AuditBundle(
+            audit_id=audit_id,
+            org_id="org_concurrent",
+            target_url=f"https://example.com/page-{idx}",
+        )
+        store.save(bundle)
+        return audit_id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(_save_one, idx) for idx in range(24)]
+        saved_ids = [fut.result() for fut in futures]
+
+    assert len(saved_ids) == 24
+    listed = store.list_for_org("org_concurrent", limit=50)
+    assert len(listed) == 24
+    assert store.get_stats()["total_audits"] == 24
+    for audit_id in saved_ids:
+        loaded = store.get("org_concurrent", audit_id)
+        assert loaded is not None
+        assert loaded.audit_id == audit_id
+
+
+def test_delete_audit_with_tenant_isolation() -> None:
+    client = _make_client()
+    token_a = mint_auth_token(org_id="org_del_a", sub="a@example.com", secret=_AUTH_SECRET)
+    token_b = mint_auth_token(org_id="org_del_b", sub="b@example.com", secret=_AUTH_SECRET)
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    created = client.post("/audits", json={"target_url": "https://del.example.com"}, headers=headers_a)
+    assert created.status_code == 201
+    audit_id = created.json()["audit_id"]
+
+    cross_tenant_del = client.delete(f"/audits/{audit_id}", headers=headers_b)
+    assert cross_tenant_del.status_code == 404
+
+    owner_del = client.delete(f"/audits/{audit_id}", headers=headers_a)
+    assert owner_del.status_code == 200
+    assert owner_del.json() == {"deleted": True}
+
+    after_get = client.get(f"/audits/{audit_id}", headers=headers_a)
+    assert after_get.status_code == 404
+
+    second_del = client.delete(f"/audits/{audit_id}", headers=headers_a)
+    assert second_del.status_code == 404
+
+
+def test_cache_control_no_store_on_tenant_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVICECORE_DEV_MODE", "1")
+    client = _make_client()
+    token = mint_auth_token(org_id="org_cache", sub="user@example.com", secret=_AUTH_SECRET)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    audits_resp = client.get("/audits", headers=headers)
+    assert audits_resp.status_code == 200
+    assert audits_resp.headers.get("Cache-Control") == "no-store"
+
+    monitors_resp = client.get("/monitors", headers=headers)
+    assert monitors_resp.status_code == 200
+    assert monitors_resp.headers.get("Cache-Control") == "no-store"
+
+    dev_token_resp = client.post("/dev/token")
+    assert dev_token_resp.status_code == 200
+    assert dev_token_resp.headers.get("Cache-Control") == "no-store"
+
+    health_resp = client.get("/healthcheck")
+    assert health_resp.status_code == 200
+    assert "Cache-Control" not in health_resp.headers

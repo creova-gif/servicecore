@@ -51,3 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `PATCH /monitors/{monitor_id}` and `DELETE /monitors/{monitor_id}` endpoints with org-scoped persistence and Workbench monitor lifecycle controls.
   - Added formula-safe CSV export (`GET /audits/{audit_id}/export/csv`) and Workbench `"Download Bundle JSON"` / `"Download CSV"` export actions.
   - Extracted Workbench keyboard triage shortcuts into a dedicated hook with expanded unit test coverage.
+- **Wave 11 — Outbound Webhook HMAC Signing, Audit Deletion & Concurrent SQLite Stress Verification:**
+  - Added outbound webhook HMAC-SHA256 signing for monitor alert deliveries.
+  - Added `DELETE /audits/{audit_id}` endpoint with org-scoped persistence, Workbench `"Delete"` audit switcher control, and `deleteAudit` API client coverage.
+  - Added concurrent SQLite WAL stress verification tests for multi-writer audit and monitor operations.

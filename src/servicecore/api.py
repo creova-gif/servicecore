@@ -255,6 +255,8 @@ def create_app(
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if request.url.path.startswith(("/audits", "/monitors", "/dev/token")):
+            response.headers["Cache-Control"] = "no-store"
         _api_logger.info(
             json.dumps(
                 {
@@ -389,6 +391,17 @@ def create_app(
         if bundle is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
         return bundle
+
+    @app.delete("/audits/{audit_id}", response_model=DeleteResponse)
+    def delete_audit_endpoint(
+        audit_id: str,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> DeleteResponse:
+        active_store: AuditStore = request.app.state.store
+        if not active_store.delete_audit(tenant.org_id, audit_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
+        return DeleteResponse(deleted=True)
 
     @app.get("/audits/{audit_id}/diff", response_model=DiffReport)
     def diff_audit_endpoint(

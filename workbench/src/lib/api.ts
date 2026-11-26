@@ -416,3 +416,19 @@ export async function deleteMonitor(
     },
   );
 }
+
+/**
+ * Delete an AuditBundle by ID.
+ */
+export async function deleteAudit(
+  auditId: string,
+  token: string,
+): Promise<{ deleted: boolean }> {
+  return requestJson<{ deleted: boolean }>(
+    `/audits/${encodeURIComponent(auditId)}`,
+    {
+      method: "DELETE",
+      token,
+    },
+  );
+}

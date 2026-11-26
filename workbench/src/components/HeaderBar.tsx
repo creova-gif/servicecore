@@ -13,6 +13,8 @@ export interface HeaderBarProps {
   targetUrl: string;
   serverAudits: AuditBundle[];
   onSwitchAudit: (audit: AuditBundle) => void;
+  isDeletingAudit: boolean;
+  onDeleteAudit: (auditId: string) => void;
   baselineAuditId: string;
   isLoadingDiff: boolean;
   onSelectBaseline: (baselineId: string) => void;
@@ -42,6 +44,8 @@ export function HeaderBar({
   targetUrl,
   serverAudits,
   onSwitchAudit,
+  isDeletingAudit,
+  onDeleteAudit,
   baselineAuditId,
   isLoadingDiff,
   onSelectBaseline,
@@ -94,25 +98,36 @@ export function HeaderBar({
 
       <div className="flex flex-wrap items-center gap-3">
         {apiMode === "live" && serverAudits.length > 0 ? (
-          <select
-            aria-label="Select audit"
-            value={auditId}
-            onChange={(e) => {
-              const selectedAudit = serverAudits.find(
-                (item) => item.audit_id === e.target.value,
-              );
-              if (selectedAudit) {
-                onSwitchAudit(selectedAudit);
-              }
-            }}
-            className="min-h-[44px] lg:min-h-[32px] max-w-[220px] rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2 py-1 font-mono text-xs text-[var(--ink-primary)]"
-          >
-            {serverAudits.map((item) => (
-              <option key={item.audit_id} value={item.audit_id}>
-                {item.audit_id} — {item.target_url}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1.5">
+            <select
+              aria-label="Select audit"
+              value={auditId}
+              onChange={(e) => {
+                const selectedAudit = serverAudits.find(
+                  (item) => item.audit_id === e.target.value,
+                );
+                if (selectedAudit) {
+                  onSwitchAudit(selectedAudit);
+                }
+              }}
+              className="min-h-[44px] lg:min-h-[32px] max-w-[220px] rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2 py-1 font-mono text-xs text-[var(--ink-primary)]"
+            >
+              {serverAudits.map((item) => (
+                <option key={item.audit_id} value={item.audit_id}>
+                  {item.audit_id} — {item.target_url}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label="Delete selected audit"
+              disabled={isDeletingAudit}
+              onClick={() => onDeleteAudit(auditId)}
+              className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--accent-critical)] bg-[var(--bg-surface)] font-mono text-xs font-semibold text-[var(--accent-critical)] hover:bg-red-50 disabled:opacity-40"
+            >
+              {isDeletingAudit ? "Deleting..." : "Delete"}
+            </button>
+          </div>
         ) : null}
 
         {apiMode === "live" && serverAudits.length >= 2 ? (

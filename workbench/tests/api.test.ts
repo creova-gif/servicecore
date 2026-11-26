@@ -5,6 +5,7 @@ import {
   bootstrapDevToken,
   createAudit,
   createMonitor,
+  deleteAudit,
   deleteMonitor,
   exportAudit,
   exportAuditCsv,
@@ -297,6 +298,19 @@ describe("audit API client functions", () => {
         return true;
       },
     );
+  });
+
+  it("deleteAudit sends DELETE /audits/:id with bearer token", async () => {
+    const calls = mockFetch(() =>
+      Response.json({ deleted: true }, { status: 200 }),
+    );
+
+    const res = await deleteAudit("aud/1", "tok_aud_del");
+    assert.deepEqual(res, { deleted: true });
+    assert.equal(calls[0].url, "http://localhost:8000/audits/aud%2F1");
+    assert.equal(calls[0].init?.method, "DELETE");
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_aud_del");
   });
 
   it("fetchAuditDiff sends GET /audits/:id/diff?baseline_id=... with bearer token", async () => {
