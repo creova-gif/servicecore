@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bootstrapDevToken,
+  bulkReviewFindings,
   createAudit,
   createMonitor,
   deleteAudit,
@@ -133,6 +134,7 @@ export function WorkbenchLayout({
   const [crawlEnabled, setCrawlEnabled] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isDeletingAudit, setIsDeletingAudit] = useState(false);
+  const [isBulkApproving, setIsBulkApproving] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingSarif, setIsDownloadingSarif] = useState(false);
   const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
@@ -190,6 +192,9 @@ export function WorkbenchLayout({
   const queueTriggerRef = useRef<HTMLButtonElement | null>(null);
   const drawerCloseRef = useRef<HTMLButtonElement | null>(null);
   const wasDrawerOpenRef = useRef(false);
+  const shortcutsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const helpCloseRef = useRef<HTMLButtonElement | null>(null);
+  const wasHelpOpenRef = useRef(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -205,6 +210,20 @@ export function WorkbenchLayout({
       });
     }
   }, [drawerOpen]);
+
+  useEffect(() => {
+    if (helpOpen) {
+      wasHelpOpenRef.current = true;
+      requestAnimationFrame(() => {
+        helpCloseRef.current?.focus();
+      });
+    } else if (wasHelpOpenRef.current) {
+      wasHelpOpenRef.current = false;
+      requestAnimationFrame(() => {
+        shortcutsTriggerRef.current?.focus();
+      });
+    }
+  }, [helpOpen]);
 
   const loadBundle = useCallback((nextBundle: AuditBundle, serverBacked: boolean) => {
     setBundle(nextBundle);
@@ -274,6 +293,19 @@ export function WorkbenchLayout({
     () => new Map(patches.map((p) => [p.finding_id, p])),
     [patches],
   );
+
+  const pendingBoundFindings = useMemo(() => {
+    return bundle.findings.filter((finding) => {
+      const review = reviewById.get(finding.finding_id);
+      if (review?.status !== "PENDING") {
+        return false;
+      }
+      const patch = patchById.get(finding.finding_id);
+      return Boolean(patch && patch.rule_id === finding.rule_id);
+    });
+  }, [bundle.findings, reviewById, patchById]);
+
+  const pendingBoundCount = pendingBoundFindings.length;
 
   const counts = useMemo(() => {
     let pending = 0;
@@ -502,6 +534,84 @@ export function WorkbenchLayout({
       advanceToNextPending,
     ],
   );
+
+  const handleBulkApproveBound = useCallback(async () => {
+    if (pendingBoundFindings.length === 0 || isBulkApproving) {
+      return;
+    }
+
+    const findingIds = pendingBoundFindings.map((f) => f.finding_id);
+    const pendingBoundIds = new Set(findingIds);
+    const countLabel = `${findingIds.length} bound finding${findingIds.length === 1 ? "" : "s"}`;
+
+    if (apiMode === "live" && authToken && isServerBundle) {
+      setIsBulkApproving(true);
+      setApiError(null);
+      try {
+        const serverBundle = await bulkReviewFindings(
+          bundle.audit_id,
+          "APPROVED",
+          authToken,
+          { findingIds },
+        );
+        const nextReviews = buildInitialReviews(serverBundle);
+        setReviews(nextReviews);
+        setExportState("idle");
+        setExportedDigest(null);
+        setExportArtifacts(null);
+        setUndoSnapshot(null);
+        setAnnouncement(`Approved ${countLabel}.`);
+        if (activeFinding && pendingBoundIds.has(activeFinding.finding_id)) {
+          advanceToNextPending(nextReviews, activeFinding.finding_id);
+        }
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Failed to bulk approve bound findings.";
+        setApiError(`Bulk approval failed: ${message}`);
+        setAnnouncement(`Error bulk approving bound findings: ${message}`);
+      } finally {
+        setIsBulkApproving(false);
+      }
+      return;
+    }
+
+    const signedAt = new Date().toISOString();
+    const updatedReviews = reviews.map((review) =>
+      pendingBoundIds.has(review.finding_id)
+        ? {
+            ...review,
+            status: "APPROVED" as const,
+            rejection_reason: null,
+            reviewer_id: "reviewer@servicecore.local",
+            signed_at_utc: signedAt,
+          }
+        : review,
+    );
+    setReviews(updatedReviews);
+    setIsRejecting(false);
+    setDraftRejectionReason("");
+    setExportState("idle");
+    setExportedDigest(null);
+    setExportArtifacts(null);
+    setApiError(null);
+    setUndoSnapshot(null);
+    setAnnouncement(`Approved ${countLabel}.`);
+    if (activeFinding && pendingBoundIds.has(activeFinding.finding_id)) {
+      advanceToNextPending(updatedReviews, activeFinding.finding_id);
+    }
+  }, [
+    pendingBoundFindings,
+    isBulkApproving,
+    apiMode,
+    authToken,
+    isServerBundle,
+    bundle.audit_id,
+    reviews,
+    activeFinding,
+    advanceToNextPending,
+  ]);
 
   const handleStartReject = useCallback(() => {
     if (!activeFinding || !activeReview) {
@@ -1303,6 +1413,7 @@ export function WorkbenchLayout({
         onToggleMonitors={() => setMonitorsOpen((prev) => !prev)}
         helpOpen={helpOpen}
         onToggleHelp={() => setHelpOpen((prev) => !prev)}
+        shortcutsTriggerRef={shortcutsTriggerRef}
       />
 
       {/* Main Split-Pane Area */}
@@ -1325,6 +1436,11 @@ export function WorkbenchLayout({
             activeFindingId={activeFinding?.finding_id ?? null}
             onSelectFinding={handleSelectFindingFromQueue}
             onCloseDrawer={() => setDrawerOpen(false)}
+            pendingBoundCount={pendingBoundCount}
+            onBulkApproveBound={() => {
+              void handleBulkApproveBound();
+            }}
+            isBulkApproving={isBulkApproving}
           />
         </aside>
 
@@ -1357,6 +1473,11 @@ export function WorkbenchLayout({
                 onSelectFinding={handleSelectFindingFromQueue}
                 onCloseDrawer={() => setDrawerOpen(false)}
                 closeButtonRef={drawerCloseRef}
+                pendingBoundCount={pendingBoundCount}
+                onBulkApproveBound={() => {
+                  void handleBulkApproveBound();
+                }}
+                isBulkApproving={isBulkApproving}
               />
             </aside>
           </div>
@@ -1514,6 +1635,7 @@ export function WorkbenchLayout({
                 Keyboard Shortcuts
               </h2>
               <button
+                ref={helpCloseRef}
                 type="button"
                 onClick={() => setHelpOpen(false)}
                 className="min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] font-mono text-xs font-semibold text-[var(--ink-primary)] hover:bg-[var(--bg-canvas)]"
