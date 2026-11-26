@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 import uuid
@@ -155,6 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     monitors_p.add_argument("--org-id", required=True, help="Organization ID to run due monitors for")
     monitors_p.add_argument("--webhook-url", default=None, help="Optional webhook URL for regression alerts")
     monitors_p.add_argument("--webhook-secret", default=None, help="Optional HMAC-SHA256 secret for webhook alerts")
+
+    backup_p = sub.add_parser("backup", help="Create a verified online SQLite backup")
+    backup_p.add_argument("--db-path", required=True, type=Path, help="Path to source SQLiteAuditStore database")
+    backup_p.add_argument("--out", required=True, type=Path, help="Destination path for the SQLite backup")
     return parser
 
 
@@ -265,6 +270,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             )
         )
+        return 0
+
+    if args.command == "backup":
+        if not args.db_path.exists():
+            print(f"ERROR: Database not found: {args.db_path}", file=sys.stderr)
+            return 1
+        try:
+            dest = SQLiteAuditStore(args.db_path).backup(args.out)
+            payload = json.dumps({"backup_path": str(dest), "size_bytes": dest.stat().st_size})
+        except (OSError, sqlite3.Error, RuntimeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(payload)
         return 0
 
     return 1

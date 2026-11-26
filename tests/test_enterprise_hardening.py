@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from servicecore.api import InMemoryAuditStore, create_app, mint_auth_token
 from servicecore.exporter import export_csv, sign_bundle
 from servicecore.schemas import (
     AuditBundle,
+    AuditEvent,
     AuditTelemetry,
     FindingEvidence,
     FindingReview,
+    MonitorSchedule,
     RemediationPatch,
     SeverityLevel,
     UnsignedFindingError,
@@ -1050,3 +1053,55 @@ def test_prometheus_metrics_endpoint() -> None:
     assert "servicecore_monitors_total 1\n" in body
     assert "servicecore_stripe_events_total 0\n" in body
     assert "servicecore_uptime_seconds " in body
+
+
+def test_sqlite_online_backup_preserves_all_tables_and_integrity(tmp_path: Path) -> None:
+    db_path = tmp_path / "source.db"
+    store = SQLiteAuditStore(db_path)
+
+    bundle = AuditBundle(
+        audit_id="audit-bkp-1",
+        org_id="org-bkp",
+        target_url="https://example.com",
+    )
+    store.save(bundle)
+    store.save_monitor(
+        MonitorSchedule(
+            monitor_id="mon-bkp-1",
+            org_id="org-bkp",
+            target_url="https://example.com",
+            baseline_audit_id="audit-bkp-1",
+        )
+    )
+    store.record_event(
+        AuditEvent(
+            event_id="evt-bkp-1",
+            org_id="org-bkp",
+            audit_id="audit-bkp-1",
+            actor_sub="user@example.com",
+            action="audit.created",
+            detail="Created audit for backup test",
+            created_at_utc=datetime.now(UTC),
+        )
+    )
+    assert store.record_stripe_event("evt_stripe_bkp_1") is True
+
+    backup_path = tmp_path / "nested" / "dir" / "backup.db"
+    returned = store.backup(backup_path)
+    assert returned == backup_path
+    assert backup_path.exists()
+
+    with sqlite3.connect(backup_path) as conn:
+        assert conn.execute("PRAGMA integrity_check;").fetchone() == ("ok",)
+
+    restored = SQLiteAuditStore(backup_path)
+    assert restored.get("org-bkp", "audit-bkp-1") is not None
+    assert restored.get_monitor("org-bkp", "mon-bkp-1") is not None
+    events = restored.list_events("org-bkp", "audit-bkp-1")
+    assert [e.event_id for e in events] == ["evt-bkp-1"]
+    assert restored.record_stripe_event("evt_stripe_bkp_1") is False
+    assert restored.get_stats() == {
+        "total_audits": 1,
+        "total_monitors": 1,
+        "processed_stripe_events": 1,
+    }

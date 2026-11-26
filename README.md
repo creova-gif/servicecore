@@ -14,6 +14,7 @@ ServiceCore is an AI-native compliance delivery platform for **AODA / WCAG 2.2 W
 
 - **Spec & Review Ledger:** [PROJECT_SPEC.md](PROJECT_SPEC.md)
 - **API Reference:** [docs/API.md](docs/API.md)
+- **Operations & Runbook:** [docs/OPERATIONS.md](docs/OPERATIONS.md)
 - **Design Doc & UI Spec:** [docs/designs/servicecore-platform.md](docs/designs/servicecore-platform.md), [DESIGN.md](DESIGN.md)
 - **Standards & Security:** [AGENTS.md](AGENTS.md), [SECURITY.md](SECURITY.md), [docs/adr/001-dual-engine-evidence-architecture.md](docs/adr/001-dual-engine-evidence-architecture.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 

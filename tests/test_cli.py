@@ -308,3 +308,38 @@ def test_cli_monitors_run_due_blocks_ssrf_webhook_url(tmp_path: Path, capsys: ob
     assert rc == 1
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert "ERROR:" in captured.err
+
+
+def test_cli_backup_creates_verified_copy_and_handles_missing_db(
+    tmp_path: Path, capsys: object
+) -> None:
+    missing_db = tmp_path / "missing.db"
+    missing_out = tmp_path / "missing_backup.db"
+    rc_missing = main(["backup", "--db-path", str(missing_db), "--out", str(missing_out)])
+    assert rc_missing == 1
+    assert not missing_out.exists()
+    missing_captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert f"ERROR: Database not found: {missing_db}" in missing_captured.err
+
+    db_path = tmp_path / "source.db"
+    store = SQLiteAuditStore(db_path)
+    store.save(
+        AuditBundle(
+            audit_id="audit-cli-bkp",
+            org_id="org-cli-bkp",
+            target_url="https://example.com",
+        )
+    )
+
+    out_path = tmp_path / "backups" / "audit.db"
+    rc = main(["backup", "--db-path", str(db_path), "--out", str(out_path)])
+    assert rc == 0
+    assert out_path.exists()
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    result = json.loads(captured.out)
+    assert result["backup_path"] == str(out_path)
+    assert result["size_bytes"] == out_path.stat().st_size
+    assert result["size_bytes"] > 0
+
+    restored = SQLiteAuditStore(out_path)
+    assert restored.get("org-cli-bkp", "audit-cli-bkp") is not None

@@ -76,3 +76,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `GET /metrics/prometheus` (`text/plain; version=0.0.4; charset=utf-8`) exposing `servicecore_audits_total`, `servicecore_monitors_total`, `servicecore_stripe_events_total`, and `servicecore_uptime_seconds`.
   - Added `X-ServiceCore-Timestamp` replay-window protection (`max_age_seconds=300`) and timestamped `<timestamp>.<raw_body>` HMAC-SHA256 signing/verification in `src/servicecore/alerts.py`.
   - Extracted Workbench triage utilities (`workbench/src/lib/triage.ts`) with unit test coverage.
+- **Wave 18 — Online SQLite Backup/Integrity Verification & Operations Runbook:**
+  - Added `SQLiteAuditStore.backup` and `servicecore backup --db-path ... --out ...` online SQLite WAL backup with `PRAGMA integrity_check` verification.
+  - Published `docs/OPERATIONS.md` covering probes and structured JSON logging, online SQLite WAL backup/DR and `monitors-run-due` scheduling, secret rotation, and incident response (`429 Retry-After`, `SSRFBlockedError`, `EvidenceMismatchError`, `GET /audits/{audit_id}/events`), and linked it in `README.md`.

@@ -62,3 +62,7 @@
 - [x] Add `GET /metrics/prometheus` Prometheus text-format scrape endpoint (`src/servicecore/api.py`)
 - [x] Add `X-ServiceCore-Timestamp` replay-window protection (`max_age_seconds=300`) to `sign_webhook_payload`, `verify_webhook_signature`, and `dispatch_webhook_alert` (`src/servicecore/alerts.py`)
 - [x] Extract Workbench triage utilities (`workbench/src/lib/triage.ts`) with unit test suite and update `docs/API.md`, `CHANGELOG.md`, and `TASKS.md`
+
+## Wave 18: Online SQLite Backup/Integrity Verification & Operations Runbook
+- [x] Add `SQLiteAuditStore.backup` and `servicecore backup --db-path ... --out ...` with `PRAGMA integrity_check` verification
+- [x] Publish `docs/OPERATIONS.md` covering probes/observability, online SQLite WAL backup/DR, secret rotation, and incident response, and link it in `README.md`, `CHANGELOG.md`, and `TASKS.md`

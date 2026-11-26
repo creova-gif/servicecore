@@ -449,3 +449,22 @@ class SQLiteAuditStore:
             "total_monitors": total_monitors,
             "processed_stripe_events": processed_stripe_events,
         }
+
+    def backup(self, dest_path: Path | str) -> Path:
+        """Create an online SQLite backup at dest_path and verify its integrity."""
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            src_conn = self._connect()
+            dst_conn: sqlite3.Connection | None = None
+            try:
+                dst_conn = sqlite3.connect(dest)
+                src_conn.backup(dst_conn)
+                integrity = dst_conn.execute("PRAGMA integrity_check;").fetchone()
+                if integrity != ("ok",):
+                    raise RuntimeError(f"SQLite backup integrity check failed: {integrity!r}")
+            finally:
+                if dst_conn is not None:
+                    dst_conn.close()
+                self._close_if_ephemeral(src_conn)
+        return dest
