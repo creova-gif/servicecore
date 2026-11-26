@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-quality-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv pip install --system ".[dev]"
+      - name: Type check (mypy --strict)
+        run: mypy src/ evals/ tests/
+      - name: Lint (ruff)
+        run: ruff check src/ evals/ tests/
+      - name: Run deterministic unit & benchmark tests
+        run: pytest -v
+      - name: Run deterministic SMB benchmark gate
+        run: python -c "from evals.runner import run_smb_benchmark; r = run_smb_benchmark(); assert r.precision == 1.0 and r.recall == 1.0 and r.unverified_claims == 0"
+
+  workbench-typecheck-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workbench
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: workbench/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit tests
+        run: npm test
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Production build
+        run: npm run build

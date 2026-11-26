@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8080"
+    volumes:
+      - servicecore_data:/data
+    environment:
+      SERVICECORE_DB_PATH: /data/servicecore.sqlite
+      SERVICECORE_DEV_MODE: ${SERVICECORE_DEV_MODE:-1}
+      SERVICECORE_CORS_ORIGINS: http://localhost:3000,http://localhost:3105
+
+  workbench:
+    build:
+      context: ./workbench
+      args:
+        NEXT_PUBLIC_SERVICECORE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_SERVICECORE_API_URL: http://localhost:8000
+    depends_on:
+      - api
+
+volumes:
+  servicecore_data:

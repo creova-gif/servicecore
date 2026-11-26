@@ -1,0 +1,34 @@
+# Python 3.12 / uv
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Node.js / Next.js (workbench)
+workbench/node_modules/
+workbench/.next/
+workbench/out/
+workbench/tsconfig.tsbuildinfo
+.env
+.env.local
+.env.*.local
+
+# SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+
+# Tooling / Artifacts
+.gstack/

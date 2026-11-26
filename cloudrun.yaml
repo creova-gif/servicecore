@@ -1,0 +1,38 @@
+# Split Cloud Run Architecture (Wave 2-3):
+# 1. servicecore-api: lightweight FastAPI gateway + workbench API (512 MiB, high concurrency)
+# 2. servicecore-worker: isolated Playwright + pypdf scanner worker (2-4 GiB, concurrency=2, --disable-dev-shm-usage)
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: servicecore-api
+spec:
+  template:
+    spec:
+      containerConcurrency: 80
+      containers:
+        - image: gcr.io/PROJECT_ID/servicecore:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              memory: 512Mi
+              cpu: "1"
+---
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: servicecore-worker
+spec:
+  template:
+    spec:
+      containerConcurrency: 2
+      timeoutSeconds: 300
+      containers:
+        - image: gcr.io/PROJECT_ID/servicecore-worker:latest
+          env:
+            - name: CHROMIUM_FLAGS
+              value: "--disable-dev-shm-usage"
+          resources:
+            limits:
+              memory: 4Gi
+              cpu: "2"
