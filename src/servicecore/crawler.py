@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import time
 from collections import deque
 from collections.abc import Callable
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
@@ -31,13 +32,11 @@ def _default_html_fetcher(url: str) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _normalize_url(url: str) -> str:
+def _canonicalize_url(url: str) -> str:
     """Strip URL fragments and normalize empty root paths to '/'."""
-    defragged, _ = urldefrag(url.strip())
-    parsed = urlparse(defragged)
-    if not parsed.path:
-        return parsed._replace(path="/").geturl()
-    return defragged
+    parts = urlsplit(url.strip())
+    path = parts.path or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
 class CrawlConfig(BaseModel):
@@ -45,6 +44,8 @@ class CrawlConfig(BaseModel):
 
     max_pages: int = Field(default=5, ge=1, le=20)
     max_pdfs: int = Field(default=5, ge=0, le=20)
+    max_html_bytes: int = Field(default=2_000_000, ge=10_000)
+    crawl_budget_seconds: float = Field(default=60.0, gt=0.0)
 
 
 class SiteCrawlScanner:
@@ -79,8 +80,8 @@ class SiteCrawlScanner:
             if not raw_href or raw_href.startswith("#"):
                 continue
 
-            resolved = _normalize_url(urljoin(base_url, raw_href))
-            parsed = urlparse(resolved)
+            resolved = _canonicalize_url(urljoin(base_url, raw_href))
+            parsed = urlsplit(resolved)
             if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
                 continue
             if parsed.netloc.lower() != root_netloc:
@@ -124,8 +125,8 @@ class SiteCrawlScanner:
     def scan(self, target: str) -> list[FindingEvidence]:
         """Crawl up to max_pages same-origin HTML pages and max_pdfs PDFs."""
         validated_root = validate_public_url(target)
-        root_url = _normalize_url(validated_root)
-        root_netloc = urlparse(root_url).netloc.lower()
+        root_url = _canonicalize_url(validated_root)
+        root_netloc = urlsplit(root_url).netloc.lower()
 
         queue: deque[str] = deque([root_url])
         visited_pages: set[str] = {root_url}
@@ -136,12 +137,15 @@ class SiteCrawlScanner:
         html_findings_by_key: dict[tuple[str, str], FindingEvidence] = {}
         pages_per_key: dict[tuple[str, str], set[str]] = {}
 
+        deadline = time.monotonic() + self.config.crawl_budget_seconds
         while queue and len(crawled_pages) < self.config.max_pages:
+            if time.monotonic() >= deadline:
+                break
             current_url = queue.popleft()
             is_root = current_url == root_url
 
             try:
-                current_url = _normalize_url(validate_public_url(current_url))
+                current_url = _canonicalize_url(validate_public_url(current_url))
                 html = self.html_fetcher(current_url)
                 page_findings = self.web_scanner.scan(current_url)
             except SSRFBlockedError:
@@ -161,12 +165,13 @@ class SiteCrawlScanner:
                 if key not in html_findings_by_key:
                     html_findings_by_key[key] = finding
 
-            self._collect_pdf_links(html, current_url, seen_pdfs, discovered_pdfs)
+            if len(html.encode("utf-8", errors="replace")) <= self.config.max_html_bytes:
+                self._collect_pdf_links(html, current_url, seen_pdfs, discovered_pdfs)
 
-            for link in self._extract_same_origin_links(html, current_url, root_netloc):
-                if link not in visited_pages:
-                    visited_pages.add(link)
-                    queue.append(link)
+                for link in self._extract_same_origin_links(html, current_url, root_netloc):
+                    if link not in visited_pages:
+                        visited_pages.add(link)
+                        queue.append(link)
 
         pdf_findings: list[FindingEvidence] = []
         for pdf_url in discovered_pdfs:

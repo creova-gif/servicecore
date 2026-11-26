@@ -5,13 +5,15 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import os
-import sqlite3
 import threading
+import time
 import uuid
+from collections import deque
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
@@ -41,6 +43,7 @@ from servicecore.schemas import (
     SSRFBlockedError,
     UnsignedFindingError,
 )
+from servicecore.store import AuditStore, InMemoryAuditStore, SQLiteAuditStore
 from servicecore.synthesizer import ClaudeSynthesizer, sanitize_html_snippet, validate_patch_binding
 
 __all__ = [
@@ -155,251 +158,45 @@ class DevTokenResponse(BaseModel):
     org_id: str = Field(min_length=1)
 
 
-class AuditStore(Protocol):
-    """Tenant-scoped persistence abstraction for AuditBundle records."""
+class SlidingWindowRateLimiter:
+    """Thread-safe in-memory sliding-window rate limiter."""
 
-    def save(self, bundle: AuditBundle) -> None:
-        """Persist or overwrite an AuditBundle under its org_id and audit_id."""
-        ...
-
-    def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
-        """Fetch an AuditBundle strictly scoped to org_id, or None if not found."""
-        ...
-
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        """List all AuditBundles belonging to org_id."""
-        ...
-
-    def save_monitor(self, monitor: MonitorSchedule) -> None:
-        """Persist or overwrite a MonitorSchedule under its org_id and monitor_id."""
-        ...
-
-    def get_monitor(self, org_id: str, monitor_id: str) -> MonitorSchedule | None:
-        """Fetch a MonitorSchedule strictly scoped to org_id, or None if not found."""
-        ...
-
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        """List all MonitorSchedules belonging to org_id."""
-        ...
-
-
-class InMemoryAuditStore:
-    """In-memory AuditStore keyed by (org_id, audit_id) for strict tenant isolation."""
-
-    def __init__(self) -> None:
-        self._bundles: dict[tuple[str, str], AuditBundle] = {}
-        self._monitors: dict[tuple[str, str], MonitorSchedule] = {}
-
-    def save(self, bundle: AuditBundle) -> None:
-        self._bundles[(bundle.org_id, bundle.audit_id)] = bundle
-
-    def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
-        return self._bundles.get((org_id, audit_id))
-
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        return [
-            bundle
-            for (stored_org_id, _), bundle in self._bundles.items()
-            if stored_org_id == org_id
-        ]
-
-    def save_monitor(self, monitor: MonitorSchedule) -> None:
-        self._monitors[(monitor.org_id, monitor.monitor_id)] = monitor
-
-    def get_monitor(self, org_id: str, monitor_id: str) -> MonitorSchedule | None:
-        return self._monitors.get((org_id, monitor_id))
-
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        return [
-            monitor
-            for (stored_org_id, _), monitor in self._monitors.items()
-            if stored_org_id == org_id
-        ]
-
-
-class SQLiteAuditStore:
-    """SQLite-backed AuditStore with composite (org_id, audit_id) primary key."""
-
-    def __init__(self, db_path: str | os.PathLike[str]) -> None:
-        self._db_path = os.fspath(db_path)
+    def __init__(self, max_requests: int, window_seconds: float = 60.0) -> None:
+        if max_requests <= 0:
+            raise ValueError("max_requests must be positive")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
         self._lock = threading.Lock()
-        self._memory_conn: sqlite3.Connection | None = None
-        if self._db_path == ":memory:":
-            self._memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
-        else:
-            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        self._events: dict[str, deque[float]] = {}
 
-    def _connect(self) -> sqlite3.Connection:
-        if self._memory_conn is not None:
-            return self._memory_conn
-        return sqlite3.connect(self._db_path, check_same_thread=False)
-
-    def _close_if_ephemeral(self, conn: sqlite3.Connection) -> None:
-        if self._memory_conn is None:
-            conn.close()
-
-    def _init_schema(self) -> None:
+    def allow(self, key: str) -> tuple[bool, int]:
+        """Record a request for key if under limit; return (allowed, retry_after_seconds)."""
+        now = time.monotonic()
+        cutoff = now - self._window_seconds
         with self._lock:
-            conn = self._connect()
-            try:
-                with conn:
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS audits (
-                            org_id TEXT NOT NULL,
-                            audit_id TEXT NOT NULL,
-                            updated_at_utc TEXT NOT NULL,
-                            bundle_json TEXT NOT NULL,
-                            PRIMARY KEY (org_id, audit_id)
-                        )
-                        """
-                    )
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS stripe_events (
-                            event_id TEXT PRIMARY KEY,
-                            processed_at_utc TEXT NOT NULL
-                        )
-                        """
-                    )
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS monitors (
-                            org_id TEXT NOT NULL,
-                            monitor_id TEXT NOT NULL,
-                            updated_at_utc TEXT NOT NULL,
-                            monitor_json TEXT NOT NULL,
-                            PRIMARY KEY (org_id, monitor_id)
-                        )
-                        """
-                    )
-            finally:
-                self._close_if_ephemeral(conn)
+            bucket = self._events.setdefault(key, deque())
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            if len(bucket) >= self._max_requests:
+                retry_after = max(1, math.ceil(self._window_seconds - (now - bucket[0])))
+                return False, retry_after
+            bucket.append(now)
+            return True, 0
 
-    def save(self, bundle: AuditBundle) -> None:
-        """Persist or overwrite an AuditBundle under its (org_id, audit_id) key."""
-        updated_at_utc = datetime.now(UTC).isoformat()
-        bundle_json = bundle.model_dump_json()
-        with self._lock:
-            conn = self._connect()
-            try:
-                with conn:
-                    conn.execute(
-                        """
-                        INSERT INTO audits (org_id, audit_id, updated_at_utc, bundle_json)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(org_id, audit_id) DO UPDATE SET
-                            updated_at_utc = excluded.updated_at_utc,
-                            bundle_json = excluded.bundle_json
-                        """,
-                        (bundle.org_id, bundle.audit_id, updated_at_utc, bundle_json),
-                    )
-            finally:
-                self._close_if_ephemeral(conn)
 
-    def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
-        """Fetch an AuditBundle strictly scoped to org_id, or None if not found."""
-        with self._lock:
-            conn = self._connect()
-            try:
-                row = conn.execute(
-                    "SELECT bundle_json FROM audits WHERE org_id = ? AND audit_id = ?",
-                    (org_id, audit_id),
-                ).fetchone()
-            finally:
-                self._close_if_ephemeral(conn)
-        if row is None:
-            return None
-        return AuditBundle.model_validate_json(row[0])
-
-    def list_for_org(self, org_id: str) -> list[AuditBundle]:
-        """List all AuditBundles belonging to org_id, newest updated first."""
-        with self._lock:
-            conn = self._connect()
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT bundle_json FROM audits
-                    WHERE org_id = ?
-                    ORDER BY updated_at_utc DESC, audit_id ASC
-                    """,
-                    (org_id,),
-                ).fetchall()
-            finally:
-                self._close_if_ephemeral(conn)
-        return [AuditBundle.model_validate_json(row[0]) for row in rows]
-
-    def record_stripe_event(self, event_id: str) -> bool:
-        """Record a processed Stripe event_id; return True if new, False if duplicate."""
-        processed_at_utc = datetime.now(UTC).isoformat()
-        with self._lock:
-            conn = self._connect()
-            try:
-                with conn:
-                    cursor = conn.execute(
-                        """
-                        INSERT OR IGNORE INTO stripe_events (event_id, processed_at_utc)
-                        VALUES (?, ?)
-                        """,
-                        (event_id, processed_at_utc),
-                    )
-                    return cursor.rowcount == 1
-            finally:
-                self._close_if_ephemeral(conn)
-
-    def save_monitor(self, monitor: MonitorSchedule) -> None:
-        """Persist or overwrite a MonitorSchedule under its (org_id, monitor_id) key."""
-        updated_at_utc = datetime.now(UTC).isoformat()
-        monitor_json = monitor.model_dump_json()
-        with self._lock:
-            conn = self._connect()
-            try:
-                with conn:
-                    conn.execute(
-                        """
-                        INSERT INTO monitors (org_id, monitor_id, updated_at_utc, monitor_json)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(org_id, monitor_id) DO UPDATE SET
-                            updated_at_utc = excluded.updated_at_utc,
-                            monitor_json = excluded.monitor_json
-                        """,
-                        (monitor.org_id, monitor.monitor_id, updated_at_utc, monitor_json),
-                    )
-            finally:
-                self._close_if_ephemeral(conn)
-
-    def get_monitor(self, org_id: str, monitor_id: str) -> MonitorSchedule | None:
-        """Fetch a MonitorSchedule strictly scoped to org_id, or None if not found."""
-        with self._lock:
-            conn = self._connect()
-            try:
-                row = conn.execute(
-                    "SELECT monitor_json FROM monitors WHERE org_id = ? AND monitor_id = ?",
-                    (org_id, monitor_id),
-                ).fetchone()
-            finally:
-                self._close_if_ephemeral(conn)
-        if row is None:
-            return None
-        return MonitorSchedule.model_validate_json(row[0])
-
-    def list_monitors_for_org(self, org_id: str) -> list[MonitorSchedule]:
-        """List all MonitorSchedules belonging to org_id, newest updated first."""
-        with self._lock:
-            conn = self._connect()
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT monitor_json FROM monitors
-                    WHERE org_id = ?
-                    ORDER BY updated_at_utc DESC, monitor_id ASC
-                    """,
-                    (org_id,),
-                ).fetchall()
-            finally:
-                self._close_if_ephemeral(conn)
-        return [MonitorSchedule.model_validate_json(row[0]) for row in rows]
+def _enforce_rate_limit(request: Request, key: str) -> None:
+    limiter: SlidingWindowRateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None:
+        return
+    allowed, retry_after = limiter.allow(key)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -411,14 +208,25 @@ def _b64url_decode(segment: str) -> bytes:
     return base64.urlsafe_b64decode((segment + padding).encode("ascii"))
 
 
-def mint_auth_token(org_id: str, sub: str, secret: str) -> str:
-    """Mint an HMAC-SHA256 signed bearer token encoding org_id and sub."""
+def mint_auth_token(
+    org_id: str,
+    sub: str,
+    secret: str,
+    *,
+    ttl_seconds: int | None = 86400,
+) -> str:
+    """Mint an HMAC-SHA256 signed bearer token encoding org_id, sub, and optional exp/iat."""
     if not org_id.strip() or not sub.strip():
         raise ValueError("org_id and sub must be non-empty")
     if not secret:
         raise ValueError("secret must be non-empty")
+    payload: dict[str, Any] = {"org_id": org_id, "sub": sub}
+    if ttl_seconds is not None:
+        now = int(time.time())
+        payload["iat"] = now
+        payload["exp"] = now + ttl_seconds
     payload_bytes = json.dumps(
-        {"org_id": org_id, "sub": sub},
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -469,12 +277,22 @@ def _verify_auth_token(token: str, secret: str) -> TenantContext:
         payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
         if not isinstance(payload, dict):
             raise TypeError("Token payload must be a JSON object")
-        return TenantContext.model_validate(payload)
+        exp = payload.get("exp")
+        if exp is not None and (isinstance(exp, bool) or not isinstance(exp, (int, float))):
+            raise TypeError("Token exp claim must be numeric")
+        tenant = TenantContext.model_validate(payload)
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid bearer token payload",
         ) from exc
+
+    if exp is not None and exp <= time.time():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+        )
+    return tenant
 
 
 def get_current_tenant(
@@ -551,6 +369,7 @@ def create_app(
     scanner: ScannerBackend | None = None,
     synthesizer: ClaudeSynthesizer | None = None,
     allow_origins: list[str] | None = None,
+    rate_limit_per_minute: int | None = None,
 ) -> FastAPI:
     """Build and configure the ServiceCore FastAPI application."""
     app = FastAPI(title="ServiceCore Compliance API", version="0.1.0")
@@ -561,6 +380,21 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def security_headers_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
     app.state.auth_secret = auth_secret
     app.state.stripe_webhook_secret = stripe_webhook_secret
     if store is not None:
@@ -572,6 +406,11 @@ def create_app(
     app.state.scanner = scanner
     app.state.synthesizer = synthesizer
     app.state.processed_stripe_events = set()
+    app.state.rate_limiter = (
+        SlidingWindowRateLimiter(rate_limit_per_minute)
+        if rate_limit_per_minute is not None
+        else None
+    )
 
     @app.get("/healthcheck", response_model=HealthcheckResponse)
     @app.get("/healthz", response_model=HealthcheckResponse)
@@ -608,6 +447,7 @@ def create_app(
         request: Request,
         tenant: CurrentTenant,
     ) -> AuditBundle:
+        _enforce_rate_limit(request, tenant.org_id)
         active_scanner: ScannerBackend | None = getattr(request.app.state, "scanner", None)
         active_synth: ClaudeSynthesizer | None = getattr(request.app.state, "synthesizer", None)
         try:
@@ -741,6 +581,7 @@ def create_app(
         tenant: CurrentTenant,
         body: RunDueMonitorsRequest | None = None,
     ) -> list[MonitorRunResult]:
+        _enforce_rate_limit(request, tenant.org_id)
         active_store: AuditStore = request.app.state.store
         active_scanner: ScannerBackend | None = getattr(request.app.state, "scanner", None)
         active_synth: ClaudeSynthesizer | None = getattr(request.app.state, "synthesizer", None)
@@ -787,7 +628,7 @@ def create_app(
                 sanitize_html_snippet(body.edited_after_snippet)
             except EvidenceMismatchError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(exc),
                 ) from exc
 
@@ -804,7 +645,7 @@ def create_app(
                         validate_patch_binding(candidate, findings_by_id)
                     except EvidenceMismatchError as exc:
                         raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=str(exc),
                         ) from exc
                     new_patches.append(candidate)
@@ -822,7 +663,7 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
 

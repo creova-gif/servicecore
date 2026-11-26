@@ -324,3 +324,107 @@ def test_affected_pages_aggregation_across_crawled_pages(mock_public_dns: None) 
     by_rule = {f.rule_id: f for f in findings}
     assert "[affected_pages=3]" in by_rule[shared_rule].description
     assert "[affected_pages=" not in by_rule[unique_rule].description
+
+
+def test_fragment_canonicalization_deduplicates_scans(mock_public_dns: None) -> None:
+    del mock_public_dns
+    pages = {
+        "https://example.com/": (
+            "<a href='/about#section1'>Section 1</a>"
+            "<a href='/about#section2'>Section 2</a>"
+            "<a href='/about'>About</a>"
+        ),
+        "https://example.com/about": "<p>About page</p>",
+    }
+    web = _FakeWebScanner(
+        {
+            "https://example.com/": [_make_finding(target_url="https://example.com/", component_fingerprint="fp-root")],
+            "https://example.com/about": [_make_finding(target_url="https://example.com/about", component_fingerprint="fp-about")],
+        }
+    )
+    scanner = SiteCrawlScanner(
+        web_scanner=web,
+        pdf_scanner=_FakePdfScanner({}),
+        html_fetcher=lambda url: pages[url],
+        config=CrawlConfig(max_pages=5, max_pdfs=0),
+    )
+
+    findings = scanner.scan("https://example.com#top")
+
+    assert scanner.crawled_pages == [
+        "https://example.com/",
+        "https://example.com/about",
+    ]
+    assert web.scanned_urls == [
+        "https://example.com/",
+        "https://example.com/about",
+    ]
+    assert len(findings) == 2
+
+
+def test_max_html_bytes_skips_link_extraction_on_oversized_payload(mock_public_dns: None) -> None:
+    del mock_public_dns
+    oversized_padding = "x" * 12_000
+    pages = {
+        "https://example.com/": (
+            f"<html><body>{oversized_padding}"
+            "<a href='/child'>Child</a>"
+            "<a href='/doc.pdf'>PDF</a>"
+            "</body></html>"
+        ),
+        "https://example.com/child": "<p>Should not be crawled</p>",
+    }
+    web = _FakeWebScanner(
+        {
+            "https://example.com/": [_make_finding(target_url="https://example.com/", component_fingerprint="fp-root")],
+        }
+    )
+    pdf = _FakePdfScanner({})
+    scanner = SiteCrawlScanner(
+        web_scanner=web,
+        pdf_scanner=pdf,
+        html_fetcher=lambda url: pages[url],
+        config=CrawlConfig(max_pages=5, max_pdfs=5, max_html_bytes=10_000),
+    )
+
+    findings = scanner.scan("https://example.com/")
+
+    assert scanner.crawled_pages == ["https://example.com/"]
+    assert scanner.discovered_pdfs == []
+    assert web.scanned_urls == ["https://example.com/"]
+    assert pdf.scanned_urls == []
+    assert len(findings) == 1
+
+
+def test_crawl_budget_seconds_stops_gracefully(
+    mock_public_dns: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del mock_public_dns
+    pages = {
+        "https://example.com/": "<a href='/page1'>Page 1</a><a href='/page2'>Page 2</a>",
+        "https://example.com/page1": "<p>Page 1</p>",
+        "https://example.com/page2": "<p>Page 2</p>",
+    }
+    web = _FakeWebScanner(
+        {
+            "https://example.com/": [_make_finding(target_url="https://example.com/", component_fingerprint="fp-root")],
+            "https://example.com/page1": [_make_finding(target_url="https://example.com/page1", component_fingerprint="fp-1")],
+        }
+    )
+    ticks = iter([0.0, 0.0, 5.0])
+    monkeypatch.setattr("servicecore.crawler.time.monotonic", lambda: next(ticks))
+
+    scanner = SiteCrawlScanner(
+        web_scanner=web,
+        pdf_scanner=_FakePdfScanner({}),
+        html_fetcher=lambda url: pages[url],
+        config=CrawlConfig(max_pages=5, max_pdfs=0, crawl_budget_seconds=1.0),
+    )
+
+    findings = scanner.scan("https://example.com/")
+
+    assert scanner.crawled_pages == ["https://example.com/"]
+    assert web.scanned_urls == ["https://example.com/"]
+    assert len(findings) == 1
+
