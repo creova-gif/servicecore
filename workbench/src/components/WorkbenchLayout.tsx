@@ -13,6 +13,7 @@ import {
   exportAuditPdf,
   exportAuditSarif,
   fetchAuditDiff,
+  fetchAuditEvents,
   fetchAudits,
   fetchMonitors,
   patchFindingReview,
@@ -24,6 +25,7 @@ import {
 import { useAuditKeyboardShortcuts } from "@/hooks/useAuditKeyboardShortcuts";
 import type {
   AuditBundle,
+  AuditEvent,
   DiffReport,
   FindingEvidence,
   FindingReview,
@@ -125,6 +127,7 @@ export function WorkbenchLayout({
   onRetry,
 }: WorkbenchLayoutProps) {
   const [bundle, setBundle] = useState<AuditBundle>(initialBundle);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [serverAudits, setServerAudits] = useState<AuditBundle[]>([]);
   const [apiMode, setApiMode] = useState<ApiMode>("demo");
   const [authToken, setAuthToken] = useState<string | null>(null);
@@ -248,7 +251,35 @@ export function WorkbenchLayout({
     setPublishedIssues(null);
     setPublishError(null);
     setApiError(null);
+    setAuditEvents([]);
   }, []);
+
+  const refreshAuditEvents = useCallback(
+    async (auditId: string, token: string | null, signal?: AbortSignal) => {
+      if (!token) {
+        return;
+      }
+      try {
+        const events = await fetchAuditEvents(auditId, token, signal);
+        setAuditEvents(events);
+      } catch {
+        // Non-fatal: audit trail fetch failures should not block triage or export.
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (apiMode !== "live" || !authToken || !isServerBundle) {
+      setAuditEvents([]);
+      return;
+    }
+    const controller = new AbortController();
+    void refreshAuditEvents(bundle.audit_id, authToken, controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [apiMode, authToken, isServerBundle, bundle.audit_id, refreshAuditEvents]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -501,6 +532,7 @@ export function WorkbenchLayout({
                 prev.map((r) => (r.finding_id === findingId ? serverReview : r)),
               );
             }
+            void refreshAuditEvents(bundle.audit_id, authToken);
           })
           .catch((err: unknown) => {
             setReviews((prev) =>
@@ -532,6 +564,7 @@ export function WorkbenchLayout({
       bundle.audit_id,
       scheduleUndoToast,
       advanceToNextPending,
+      refreshAuditEvents,
     ],
   );
 
@@ -564,6 +597,7 @@ export function WorkbenchLayout({
         if (activeFinding && pendingBoundIds.has(activeFinding.finding_id)) {
           advanceToNextPending(nextReviews, activeFinding.finding_id);
         }
+        void refreshAuditEvents(bundle.audit_id, authToken);
       } catch (err: unknown) {
         const message =
           err instanceof Error
@@ -730,6 +764,7 @@ export function WorkbenchLayout({
               prev.map((p) => (p.finding_id === findingId ? serverPatch : p)),
             );
           }
+          void refreshAuditEvents(bundle.audit_id, authToken);
         })
         .catch((err: unknown) => {
           setReviews((prev) =>
@@ -764,6 +799,7 @@ export function WorkbenchLayout({
     bundle.audit_id,
     scheduleUndoToast,
     advanceToNextPending,
+    refreshAuditEvents,
   ]);
 
   const handleUndo = useCallback(() => {
@@ -850,6 +886,7 @@ export function WorkbenchLayout({
         });
         setExportState("exported");
         setAnnouncement("Certified export ready. SHA-256 evidence digest generated.");
+        void refreshAuditEvents(bundle.audit_id, authToken);
       } catch (err: unknown) {
         setExportState("idle");
         const message =
@@ -1225,6 +1262,7 @@ export function WorkbenchLayout({
       setAnnouncement(
         `Downloaded certified PDF servicecore-${bundle.audit_id}.pdf.`,
       );
+      void refreshAuditEvents(bundle.audit_id, authToken);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to download certified PDF.";
@@ -1250,6 +1288,7 @@ export function WorkbenchLayout({
       setAnnouncement(
         `Downloaded SARIF 2.1.0 report servicecore-${bundle.audit_id}.sarif.json.`,
       );
+      void refreshAuditEvents(bundle.audit_id, authToken);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to download SARIF report.";
@@ -1275,6 +1314,7 @@ export function WorkbenchLayout({
       setAnnouncement(
         `Downloaded CSV report servicecore-${bundle.audit_id}.csv.`,
       );
+      void refreshAuditEvents(bundle.audit_id, authToken);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to download CSV report.";
@@ -1612,6 +1652,7 @@ export function WorkbenchLayout({
             onSaveEdit={handleSaveEdit}
             onCancelEdit={() => setIsEditing(false)}
             editorRef={editorRef}
+            auditEvents={auditEvents}
           />
         </main>
       </div>

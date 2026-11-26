@@ -51,6 +51,7 @@ from servicecore.sarif import export_sarif
 from servicecore.scanners import ScannerBackend, validate_public_url
 from servicecore.schemas import (
     AuditBundle,
+    AuditEvent,
     AuditSummary,
     DiffReport,
     EvidenceMismatchError,
@@ -95,6 +96,28 @@ _DEFAULT_CORS_ORIGINS = [
 ]
 _MAX_REQUEST_BODY_BYTES = 1_048_576
 _api_logger = logging.getLogger("servicecore.api")
+
+
+def _record_audit_event(
+    store: AuditStore,
+    org_id: str,
+    audit_id: str,
+    actor_sub: str,
+    action: str,
+    detail: str,
+) -> None:
+    """Persist an immutable compliance audit event for an audit lifecycle action."""
+    store.record_event(
+        AuditEvent(
+            event_id=f"evt-{uuid.uuid4().hex[:12]}",
+            org_id=org_id,
+            audit_id=audit_id,
+            actor_sub=actor_sub,
+            action=action,
+            detail=detail,
+            created_at_utc=datetime.now(UTC),
+        )
+    )
 
 
 class HealthcheckResponse(BaseModel):
@@ -408,6 +431,14 @@ def create_app(
         scoped_bundle = bundle.model_copy(update={"org_id": tenant.org_id})
         active_store: AuditStore = request.app.state.store
         active_store.save(scoped_bundle)
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            scoped_bundle.audit_id,
+            tenant.sub,
+            "audit.created",
+            f"Created audit for {scoped_bundle.target_url} with {len(scoped_bundle.findings)} findings",
+        )
         return scoped_bundle
 
     @app.get("/audits/{audit_id}", response_model=AuditBundle)
@@ -709,6 +740,14 @@ def create_app(
             }
         )
         active_store.save(updated_bundle)
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            audit_id,
+            tenant.sub,
+            "finding.reviewed",
+            f"Finding {finding_id} marked {body.status}",
+        )
         return updated_bundle
 
     @app.post("/audits/{audit_id}/findings/bulk-review", response_model=AuditBundle)
@@ -799,6 +838,14 @@ def create_app(
             }
         )
         active_store.save(updated_bundle)
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            audit_id,
+            tenant.sub,
+            "finding.bulk_reviewed",
+            f"Bulk reviewed {len(final_target_ids)} findings as {body.status}",
+        )
         return updated_bundle
 
     def _sign_and_verify_audit(
@@ -845,6 +892,14 @@ def create_app(
         signed_bundle = _sign_and_verify_audit(active_store, tenant.org_id, audit_id, tenant.sub)
         html_report = render_report_html(signed_bundle, draft=False)
         github_md = export_github_issues(signed_bundle)
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            audit_id,
+            tenant.sub,
+            "audit.exported",
+            f"Exported signed audit (digest={signed_bundle.evidence_digest or ''})",
+        )
         return ExportResponse(
             audit_id=signed_bundle.audit_id,
             evidence_digest=signed_bundle.evidence_digest or "",
@@ -874,6 +929,14 @@ def create_app(
         import weasyprint
 
         pdf_bytes: bytes = weasyprint.HTML(string=html_report).write_pdf()
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            audit_id,
+            tenant.sub,
+            "audit.exported_pdf",
+            f"Exported PDF report ({len(pdf_bytes)} bytes, digest={signed_bundle.evidence_digest or ''})",
+        )
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -947,11 +1010,33 @@ def create_app(
                 detail=f"GitHub API request failed: {exc}",
             ) from exc
 
+        _record_audit_event(
+            active_store,
+            tenant.org_id,
+            audit_id,
+            tenant.sub,
+            "audit.published_github",
+            f"Published {len(issues)} issues to {body.repo}",
+        )
         return PublishGitHubResponse(
             audit_id=signed_bundle.audit_id,
             issues_created=len(issues),
             issues=issues,
         )
+
+    @app.get("/audits/{audit_id}/events", response_model=list[AuditEvent])
+    def list_audit_events_endpoint(
+        audit_id: str,
+        request: Request,
+        tenant: CurrentTenant,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[AuditEvent]:
+        """Return chronological immutable compliance events for an audit."""
+        active_store: AuditStore = request.app.state.store
+        if active_store.get(tenant.org_id, audit_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
+        return active_store.list_events(tenant.org_id, audit_id, limit=limit, offset=offset)
 
     @app.post("/webhooks/stripe", response_model=WebhookResponse)
     async def stripe_webhook_endpoint(

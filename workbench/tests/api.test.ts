@@ -13,6 +13,7 @@ import {
   exportAuditPdf,
   exportAuditSarif,
   fetchAuditDiff,
+  fetchAuditEvents,
   fetchAudits,
   fetchMonitors,
   getApiBaseUrl,
@@ -24,6 +25,7 @@ import {
 } from "../src/lib/api";
 import type {
   AuditBundle,
+  AuditEvent,
   DiffReport,
   MonitorRunResult,
   MonitorSchedule,
@@ -404,6 +406,31 @@ describe("audit API client functions", () => {
     const headers = new Headers(calls[0].init?.headers);
     assert.equal(headers.get("Authorization"), "Bearer tok_pub");
     assert.equal(headers.get("Content-Type"), "application/json");
+  });
+
+  it("fetchAuditEvents sends GET /audits/:id/events with bearer token", async () => {
+    const events: AuditEvent[] = [
+      {
+        event_id: "evt_1",
+        org_id: "org_abc",
+        audit_id: "aud/1",
+        actor_sub: "reviewer@servicecore.local",
+        action: "AUDIT_CREATED",
+        detail: "Created audit for https://example.com",
+        created_at_utc: "2026-11-26T10:00:00Z",
+      },
+    ];
+    const calls = mockFetch(() => Response.json(events, { status: 200 }));
+
+    const res = await fetchAuditEvents("aud/1", "tok_events");
+    assert.deepEqual(res, events);
+    assert.equal(
+      calls[0].url,
+      "http://localhost:8000/audits/aud%2F1/events",
+    );
+    assert.equal(calls[0].init?.method, "GET");
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_events");
   });
 });
 

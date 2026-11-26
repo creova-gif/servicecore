@@ -847,3 +847,70 @@ def test_bulk_review_approves_evidence_bound_and_enforces_422_and_404() -> None:
         json={"status": "APPROVED", "finding_ids": ["f-does-not-exist"]},
     )
     assert unknown_resp.status_code == 404
+
+
+def test_audit_trail_events_chronological_and_tenant_isolated(tmp_path: Path) -> None:
+    store = SQLiteAuditStore(tmp_path / "events.db")
+    app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    client = TestClient(app)
+    token_a = mint_auth_token(org_id="org_events_a", sub="alice@a.com", secret=_AUTH_SECRET)
+    token_b = mint_auth_token(org_id="org_events_b", sub="bob@b.com", secret=_AUTH_SECRET)
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    # 1. Create audit -> audit.created
+    create_resp = client.post(
+        "/audits",
+        headers=headers_a,
+        json={"target_url": "https://events.example.com"},
+    )
+    assert create_resp.status_code == 201
+    audit_id = create_resp.json()["audit_id"]
+    finding_id = create_resp.json()["findings"][0]["finding_id"]
+
+    # 2. Review finding -> finding.reviewed
+    review_resp = client.patch(
+        f"/audits/{audit_id}/findings/{finding_id}",
+        headers=headers_a,
+        json={"status": "APPROVED"},
+    )
+    assert review_resp.status_code == 200
+
+    # 3. Export audit -> audit.exported
+    export_resp = client.post(f"/audits/{audit_id}/export", headers=headers_a)
+    assert export_resp.status_code == 200
+
+    # 4. Chronological events returned for owning tenant
+    events_resp = client.get(f"/audits/{audit_id}/events", headers=headers_a)
+    assert events_resp.status_code == 200
+    events = events_resp.json()
+    assert [e["action"] for e in events] == [
+        "audit.created",
+        "finding.reviewed",
+        "audit.exported",
+    ]
+    assert all(e["org_id"] == "org_events_a" for e in events)
+    assert all(e["audit_id"] == audit_id for e in events)
+    assert all(e["actor_sub"] == "alice@a.com" for e in events)
+    timestamps = [datetime.fromisoformat(e["created_at_utc"]) for e in events]
+    assert timestamps == sorted(timestamps)
+
+    # 5. Pagination works
+    page_resp = client.get(f"/audits/{audit_id}/events?limit=1&offset=1", headers=headers_a)
+    assert page_resp.status_code == 200
+    page = page_resp.json()
+    assert len(page) == 1
+    assert page[0]["action"] == "finding.reviewed"
+
+    # 6. Cross-tenant isolation returns 404
+    cross_resp = client.get(f"/audits/{audit_id}/events", headers=headers_b)
+    assert cross_resp.status_code == 404
+
+    # 7. Missing audit returns 404
+    missing_resp = client.get("/audits/aud-does-not-exist/events", headers=headers_a)
+    assert missing_resp.status_code == 404

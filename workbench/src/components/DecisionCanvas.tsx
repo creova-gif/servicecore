@@ -2,6 +2,7 @@
 
 import React from "react";
 import type {
+  AuditEvent,
   DiffReport,
   FindingEvidence,
   FindingReview,
@@ -69,6 +70,7 @@ export interface DecisionCanvasProps {
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   editorRef: React.RefObject<HTMLTextAreaElement | null>;
+  auditEvents: AuditEvent[];
 }
 
 function splitDiffLines(snippet: string | null): string[] {
@@ -137,6 +139,7 @@ export function DecisionCanvas({
   onSaveEdit,
   onCancelEdit,
   editorRef,
+  auditEvents,
 }: DecisionCanvasProps) {
   const renderCanvasBody = () => {
     switch (viewState) {
@@ -725,6 +728,41 @@ export function DecisionCanvas({
         </div>
       ) : null}
       {renderCanvasBody()}
+      {auditEvents.length > 0 ? (
+        <div className="px-4 lg:px-6 pb-6">
+          <details className="border border-[var(--border-hairline)] bg-[var(--bg-surface)] rounded">
+            <summary className="cursor-pointer select-none px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-primary)] bg-[var(--bg-subtle)] hover:opacity-90">
+              Chain of Custody ({auditEvents.length})
+            </summary>
+            <ul className="divide-y divide-[var(--border-hairline)] text-xs">
+              {auditEvents.map((event) => (
+                <li
+                  key={event.event_id}
+                  className="px-4 py-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"
+                >
+                  <div className="flex flex-wrap items-baseline gap-2 min-w-0">
+                    <span className="rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[var(--ink-primary)]">
+                      {event.action}
+                    </span>
+                    <span className="font-mono text-[11px] text-[var(--ink-muted)]">
+                      {event.actor_sub}
+                    </span>
+                    <span className="text-[var(--ink-primary)] break-words">
+                      {event.detail}
+                    </span>
+                  </div>
+                  <time
+                    dateTime={event.created_at_utc}
+                    className="font-mono text-[11px] text-[var(--ink-muted)] tabular-nums shrink-0"
+                  >
+                    {event.created_at_utc}
+                  </time>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      ) : null}
     </>
   );
 }

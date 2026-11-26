@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from servicecore.schemas import AuditBundle, MonitorSchedule
+from servicecore.schemas import AuditBundle, AuditEvent, MonitorSchedule
 
 __all__ = [
     "AuditStore",
@@ -53,6 +53,16 @@ class AuditStore(Protocol):
         """Delete a MonitorSchedule strictly scoped to org_id; return True if deleted."""
         ...
 
+    def record_event(self, event: AuditEvent) -> None:
+        """Persist an immutable AuditEvent for an audit."""
+        ...
+
+    def list_events(
+        self, org_id: str, audit_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AuditEvent]:
+        """List AuditEvents for an audit strictly scoped to org_id in chronological order."""
+        ...
+
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""
         ...
@@ -65,6 +75,7 @@ class InMemoryAuditStore:
         self._lock = threading.RLock()
         self._bundles: dict[tuple[str, str], AuditBundle] = {}
         self._monitors: dict[tuple[str, str], MonitorSchedule] = {}
+        self._events: dict[tuple[str, str], list[AuditEvent]] = {}
 
     def save(self, bundle: AuditBundle) -> None:
         with self._lock:
@@ -109,6 +120,22 @@ class InMemoryAuditStore:
     def delete_monitor(self, org_id: str, monitor_id: str) -> bool:
         with self._lock:
             return self._monitors.pop((org_id, monitor_id), None) is not None
+
+    def record_event(self, event: AuditEvent) -> None:
+        """Persist an immutable AuditEvent in memory under self._lock."""
+        with self._lock:
+            self._events.setdefault((event.org_id, event.audit_id), []).append(event)
+
+    def list_events(
+        self, org_id: str, audit_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AuditEvent]:
+        """List AuditEvents for an audit strictly scoped to org_id in chronological order."""
+        with self._lock:
+            items = sorted(
+                self._events.get((org_id, audit_id), []),
+                key=lambda event: event.created_at_utc,
+            )
+            return items[offset : offset + limit]
 
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""
@@ -180,6 +207,23 @@ class SQLiteAuditStore:
                             monitor_json TEXT NOT NULL,
                             PRIMARY KEY (org_id, monitor_id)
                         )
+                        """
+                    )
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS audit_events (
+                            event_id TEXT PRIMARY KEY,
+                            org_id TEXT NOT NULL,
+                            audit_id TEXT NOT NULL,
+                            created_at_utc TEXT NOT NULL,
+                            event_json TEXT NOT NULL
+                        )
+                        """
+                    )
+                    conn.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_audit_events_org_audit_created
+                        ON audit_events (org_id, audit_id, created_at_utc)
                         """
                     )
             finally:
@@ -340,6 +384,46 @@ class SQLiteAuditStore:
                     return cursor.rowcount > 0
             finally:
                 self._close_if_ephemeral(conn)
+
+    def record_event(self, event: AuditEvent) -> None:
+        """Persist an immutable AuditEvent in SQLite."""
+        created_at_utc = event.created_at_utc.isoformat()
+        event_json = event.model_dump_json()
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO audit_events (
+                            event_id, org_id, audit_id, created_at_utc, event_json
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (event.event_id, event.org_id, event.audit_id, created_at_utc, event_json),
+                    )
+            finally:
+                self._close_if_ephemeral(conn)
+
+    def list_events(
+        self, org_id: str, audit_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AuditEvent]:
+        """List AuditEvents for an audit strictly scoped to org_id in chronological order."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT event_json FROM audit_events
+                    WHERE org_id = ? AND audit_id = ?
+                    ORDER BY created_at_utc ASC, rowid ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (org_id, audit_id, limit, offset),
+                ).fetchall()
+            finally:
+                self._close_if_ephemeral(conn)
+        return [AuditEvent.model_validate_json(row[0]) for row in rows]
 
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""

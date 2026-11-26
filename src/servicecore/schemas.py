@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 __all__ = [
     "AuditBundle",
+    "AuditEvent",
     "AuditSummary",
     "AuditTelemetry",
     "CorruptPdfError",
@@ -218,3 +219,15 @@ class AuditSummary(BaseModel):
     evidence_digest: str | None = None
     llm_cost_usd: float | None = None
     estimated_gross_margin_pct: float | None = None
+
+
+class AuditEvent(BaseModel):
+    """Immutable compliance audit trail event for an audit lifecycle action."""
+
+    event_id: str = Field(min_length=1)
+    org_id: str = Field(min_length=1)
+    audit_id: str = Field(min_length=1)
+    actor_sub: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    detail: str
+    created_at_utc: datetime

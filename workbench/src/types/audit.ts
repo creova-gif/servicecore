@@ -123,3 +123,13 @@ export interface MonitorRunResult {
   audit: AuditBundle;
   diff: DiffReport | null;
 }
+
+export interface AuditEvent {
+  event_id: string;
+  org_id: string;
+  audit_id: string;
+  actor_sub: string;
+  action: string;
+  detail: string;
+  created_at_utc: string;
+}

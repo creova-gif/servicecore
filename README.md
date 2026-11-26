@@ -14,7 +14,7 @@ ServiceCore is an AI-native compliance delivery platform for **AODA / WCAG 2.2 W
 
 - **Spec & Review Ledger:** [PROJECT_SPEC.md](PROJECT_SPEC.md)
 - **Design Doc & UI Spec:** [docs/designs/servicecore-platform.md](docs/designs/servicecore-platform.md), [DESIGN.md](DESIGN.md)
-- **Standards & Security:** [AGENTS.md](AGENTS.md), [docs/adr/001-dual-engine-evidence-architecture.md](docs/adr/001-dual-engine-evidence-architecture.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+- **Standards & Security:** [AGENTS.md](AGENTS.md), [SECURITY.md](SECURITY.md), [docs/adr/001-dual-engine-evidence-architecture.md](docs/adr/001-dual-engine-evidence-architecture.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 
 ## Key Features
 
@@ -95,12 +95,15 @@ docker compose up --build
 
 ## Configuration
 
+Copy [`.env.example`](.env.example) (and [`workbench/.env.example`](workbench/.env.example) for the Next.js Workbench) to configure local or production environment variables:
+
 | Variable | Description | Default / Example |
 | --- | --- | --- |
 | `SERVICECORE_AUTH_SECRET` | HMAC-SHA256 signing secret for bearer tokens (required outside dev mode) | `""` |
 | `SERVICECORE_DB_PATH` | SQLite database path for `SQLiteAuditStore` | `/data/servicecore.sqlite` |
 | `SERVICECORE_DEV_MODE` | Set to `1` to allow local dev token minting and in-memory fallback | `0` (`1` in `docker-compose.yml`) |
 | `SERVICECORE_CORS_ORIGINS` | Comma-separated allowed CORS origins for the FastAPI backend | `http://localhost:3000,http://localhost:3105` |
+| `SERVICECORE_WEBHOOK_SECRET` | HMAC-SHA256 signing secret for outbound webhook alerts (`X-ServiceCore-Signature-256`) | `""` |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for `POST /webhooks/stripe` signature verification | `""` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for `ClaudeSynthesizer` (uses deterministic templates if unset) | `""` |
 | `NEXT_PUBLIC_SERVICECORE_API_URL` | Base URL used by the Next.js Workbench API client | `http://localhost:8000` |

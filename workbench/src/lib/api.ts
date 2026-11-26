@@ -1,5 +1,6 @@
 import type {
   AuditBundle,
+  AuditEvent,
   DiffReport,
   MonitorRunResult,
   MonitorSchedule,
@@ -460,6 +461,24 @@ export async function deleteAudit(
     {
       method: "DELETE",
       token,
+    },
+  );
+}
+
+/**
+ * Fetch immutable compliance audit trail events for an AuditBundle.
+ */
+export async function fetchAuditEvents(
+  auditId: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<AuditEvent[]> {
+  return requestJson<AuditEvent[]>(
+    `/audits/${encodeURIComponent(auditId)}/events`,
+    {
+      method: "GET",
+      token,
+      signal,
     },
   );
 }
