@@ -72,6 +72,8 @@ uv pip install --python .venv/bin/python ".[dev]"
 SERVICECORE_DEV_MODE=1 .venv/bin/uvicorn servicecore.api:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
+Health probes: `GET /healthz` (liveness) and `GET /readyz` (SQLite readiness).
+
 ### 4. Next.js Review Workbench
 ```bash
 cd workbench

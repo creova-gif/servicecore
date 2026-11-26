@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+import servicecore.api as api_mod
+import servicecore.auth as auth_mod
 from servicecore.api import create_app, mint_auth_token
 from servicecore.schemas import FindingEvidence, RemediationPatch
 from servicecore.store import SQLiteAuditStore
@@ -146,3 +151,75 @@ def test_sqlite_audit_store_enables_wal_mode(tmp_path: Path) -> None:
     assert busy_timeout == 5000
     # PRAGMA synchronous=NORMAL corresponds to integer 1 in SQLite.
     assert synchronous == 1
+
+
+def test_readyz_returns_200_when_healthy(tmp_path: Path) -> None:
+    mem_client = _make_client()
+    mem_resp = mem_client.get("/readyz")
+    assert mem_resp.status_code == 200
+    assert mem_resp.json() == {"status": "ready"}
+
+    sqlite_store = SQLiteAuditStore(tmp_path / "ready.db")
+    sqlite_app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=sqlite_store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    sqlite_client = TestClient(sqlite_app)
+    sqlite_resp = sqlite_client.get("/readyz")
+    assert sqlite_resp.status_code == 200
+    assert sqlite_resp.json() == {"status": "ready"}
+
+
+def test_readyz_returns_503_when_sqlite_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_store = SQLiteAuditStore(tmp_path / "broken.db")
+    sqlite_app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=sqlite_store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+
+    def _boom() -> object:
+        raise OSError("db unavailable")
+
+    monkeypatch.setattr(sqlite_store, "_connect", _boom)
+
+    client = TestClient(sqlite_app)
+    resp = client.get("/readyz")
+    assert resp.status_code == 503
+
+
+def test_servicecore_auth_direct_imports_and_reexports() -> None:
+    assert auth_mod.TenantContext is api_mod.TenantContext
+    assert auth_mod.mint_auth_token is api_mod.mint_auth_token
+    assert auth_mod.get_current_tenant is api_mod.get_current_tenant
+    assert auth_mod._verify_auth_token is api_mod._verify_auth_token
+    assert auth_mod._resolve_auth_secret is api_mod._resolve_auth_secret
+    assert auth_mod._verify_stripe_signature is api_mod._verify_stripe_signature
+    assert auth_mod.SlidingWindowRateLimiter is api_mod.SlidingWindowRateLimiter
+    assert auth_mod.CurrentTenant is api_mod.CurrentTenant
+
+    token = auth_mod.mint_auth_token("org_direct", "sub_direct", _AUTH_SECRET)
+    tenant = auth_mod._verify_auth_token(token, _AUTH_SECRET)
+    assert tenant == auth_mod.TenantContext(org_id="org_direct", sub="sub_direct")
+
+
+def test_structured_json_request_logging(caplog: pytest.LogCaptureFixture) -> None:
+    client = _make_client()
+    with caplog.at_level(logging.INFO, logger="servicecore.api"):
+        resp = client.get("/readyz", headers={"X-Request-ID": "req-log-42"})
+    assert resp.status_code == 200
+
+    api_records = [r for r in caplog.records if r.name == "servicecore.api"]
+    assert api_records
+    payload = json.loads(api_records[-1].getMessage())
+    assert payload["request_id"] == "req-log-42"
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/readyz"
+    assert payload["status_code"] == 200
+    assert isinstance(payload["duration_ms"], (int, float))
+    assert payload["duration_ms"] >= 0

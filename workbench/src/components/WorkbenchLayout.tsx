@@ -26,6 +26,7 @@ import type {
   RemediationPatch,
   WorkbenchViewState,
 } from "@/types/audit";
+import { HeaderBar } from "@/components/HeaderBar";
 import { MonitorsPanel } from "@/components/MonitorsPanel";
 import {
   assertNever,
@@ -1719,167 +1720,34 @@ export function WorkbenchLayout({
       </div>
 
       {/* Top Header */}
-      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] px-4 py-2.5">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            ref={queueTriggerRef}
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            aria-expanded={drawerOpen}
-            aria-controls="workbench-queue-drawer"
-            className="lg:hidden min-h-[44px] min-w-[44px] px-3 rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-xs font-mono font-semibold text-[var(--ink-primary)] tabular-nums"
-          >
-            Queue ({counts.pending} pending)
-          </button>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg lg:text-xl font-semibold tracking-tight text-[var(--ink-primary)] truncate">
-                ServiceCore Review Workbench
-              </h1>
-              <span
-                className={`inline-block rounded border px-2 py-0.5 font-mono text-[11px] font-semibold ${
-                  apiMode === "live"
-                    ? "border-[var(--accent-verify)] bg-emerald-50 text-[var(--accent-verify)]"
-                    : "border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[var(--ink-primary)]"
-                }`}
-              >
-                {apiMode === "live" ? "Live API" : "Demo Mode"}
-              </span>
-              <span className="hidden sm:inline-block rounded border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--ink-muted)]">
-                {bundle.audit_id}
-              </span>
-            </div>
-            <p className="text-xs font-mono text-[var(--ink-muted)] truncate">
-              {bundle.target_url}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          {apiMode === "live" && serverAudits.length > 0 ? (
-            <select
-              aria-label="Select audit"
-              value={bundle.audit_id}
-              onChange={(e) => {
-                const selectedAudit = serverAudits.find(
-                  (item) => item.audit_id === e.target.value,
-                );
-                if (selectedAudit) {
-                  loadBundle(selectedAudit, true);
-                  setAnnouncement(`Switched to audit ${selectedAudit.audit_id}.`);
-                }
-              }}
-              className="min-h-[44px] lg:min-h-[32px] max-w-[220px] rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2 py-1 font-mono text-xs text-[var(--ink-primary)]"
-            >
-              {serverAudits.map((item) => (
-                <option key={item.audit_id} value={item.audit_id}>
-                  {item.audit_id} — {item.target_url}
-                </option>
-              ))}
-            </select>
-          ) : null}
-
-          {apiMode === "live" && serverAudits.length >= 2 ? (
-            <select
-              aria-label="Compare against baseline audit"
-              value={baselineAuditId}
-              disabled={isLoadingDiff}
-              onChange={(e) => {
-                void handleSelectBaseline(e.target.value);
-              }}
-              className="min-h-[44px] lg:min-h-[32px] max-w-[220px] rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2 py-1 font-mono text-xs text-[var(--ink-primary)] disabled:opacity-50"
-            >
-              <option value="">Compare baseline...</option>
-              {serverAudits
-                .filter((item) => item.audit_id !== bundle.audit_id)
-                .map((item) => (
-                  <option key={item.audit_id} value={item.audit_id}>
-                    vs {item.audit_id} — {item.target_url}
-                  </option>
-                ))}
-            </select>
-          ) : null}
-
-          {apiMode === "live" ? (
-            <form
-              onSubmit={handleRunNewAudit}
-              className="flex items-center gap-2"
-              aria-label="New Audit scan form"
-            >
-              <label htmlFor="new-audit-url" className="sr-only">
-                New Audit target URL
-              </label>
-              <input
-                id="new-audit-url"
-                type="url"
-                required
-                value={newAuditUrl}
-                onChange={(e) => setNewAuditUrl(e.target.value)}
-                placeholder="New Audit: https://..."
-                disabled={isScanning}
-                className="min-h-[44px] lg:min-h-[32px] w-48 sm:w-64 rounded border border-[var(--border-hairline)] bg-[var(--bg-canvas)] px-2.5 py-1 font-mono text-xs text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)]"
-              />
-              <label className="inline-flex items-center gap-1.5 text-xs font-mono text-[var(--ink-primary)] cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={crawlEnabled}
-                  onChange={(e) => setCrawlEnabled(e.target.checked)}
-                  disabled={isScanning}
-                  className="h-3.5 w-3.5 rounded border-[var(--border-hairline)] accent-[var(--accent-verify)]"
-                />
-                Crawl
-              </label>
-              <button
-                type="submit"
-                disabled={isScanning || !newAuditUrl.trim()}
-                className="min-h-[44px] lg:min-h-[32px] px-3 py-1 rounded bg-[var(--accent-verify)] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40"
-              >
-                {isScanning ? "Scanning..." : "Run Scan"}
-              </button>
-            </form>
-          ) : null}
-
-          {apiMode === "live" ? (
-            <button
-              type="button"
-              onClick={() => setMonitorsOpen((prev) => !prev)}
-              aria-expanded={monitorsOpen}
-              aria-controls="workbench-monitors-panel"
-              className={`min-h-[44px] lg:min-h-[32px] px-2.5 py-1 rounded border font-mono text-xs font-semibold transition-colors ${
-                monitorsOpen
-                  ? "border-[var(--accent-verify)] bg-emerald-50 text-[var(--accent-verify)]"
-                  : "border-[var(--border-hairline)] bg-[var(--bg-canvas)] text-[var(--ink-primary)] hover:bg-[var(--bg-subtle)]"
-              }`}
-            >
-              Monitors ({monitors.length})
-            </button>
-          ) : null}
-
-          <div className="hidden xl:flex items-center gap-3 text-xs font-mono text-[var(--ink-muted)]">
-            <span>
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">j</kbd>/
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">k</kbd>{" "}
-              nav
-            </span>
-            <span>
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">a</kbd>{" "}
-              approve
-            </span>
-            <span>
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">r</kbd>{" "}
-              reject
-            </span>
-            <span>
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">e</kbd>{" "}
-              edit
-            </span>
-            <span>
-              <kbd className="rounded border border-[var(--border-hairline)] px-1">u</kbd>{" "}
-              undo
-            </span>
-          </div>
-        </div>
-      </header>
+      <HeaderBar
+        queueTriggerRef={queueTriggerRef}
+        drawerOpen={drawerOpen}
+        onOpenDrawer={() => setDrawerOpen(true)}
+        pendingCount={counts.pending}
+        apiMode={apiMode}
+        auditId={bundle.audit_id}
+        targetUrl={bundle.target_url}
+        serverAudits={serverAudits}
+        onSwitchAudit={(selectedAudit) => {
+          loadBundle(selectedAudit, true);
+          setAnnouncement(`Switched to audit ${selectedAudit.audit_id}.`);
+        }}
+        baselineAuditId={baselineAuditId}
+        isLoadingDiff={isLoadingDiff}
+        onSelectBaseline={(baselineId) => {
+          void handleSelectBaseline(baselineId);
+        }}
+        newAuditUrl={newAuditUrl}
+        onNewAuditUrlChange={setNewAuditUrl}
+        crawlEnabled={crawlEnabled}
+        onCrawlEnabledChange={setCrawlEnabled}
+        isScanning={isScanning}
+        onRunNewAudit={handleRunNewAudit}
+        monitorsCount={monitors.length}
+        monitorsOpen={monitorsOpen}
+        onToggleMonitors={() => setMonitorsOpen((prev) => !prev)}
+      />
 
       {/* Main Split-Pane Area */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[320px_1fr] relative">
