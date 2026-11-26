@@ -66,6 +66,7 @@ from servicecore.synthesizer import ClaudeSynthesizer, sanitize_html_snippet, va
 
 __all__ = [
     "AuditStore",
+    "BulkReviewRequest",
     "CreateAuditRequest",
     "CreateMonitorRequest",
     "DeleteResponse",
@@ -163,6 +164,14 @@ class UpdateFindingReviewRequest(BaseModel):
     status: Literal["APPROVED", "REJECTED", "EDITED"]
     rejection_reason: str | None = None
     edited_after_snippet: str | None = None
+
+
+class BulkReviewRequest(BaseModel):
+    """Request body for bulk human-in-the-loop triage of audit findings."""
+
+    status: Literal["APPROVED", "REJECTED"]
+    finding_ids: list[str] | None = None
+    rejection_reason: str | None = None
 
 
 class ExportResponse(BaseModel):
@@ -693,6 +702,96 @@ def create_app(
         updated_bundle = bundle.model_copy(
             update={
                 "patches": updated_patches,
+                "reviews": updated_reviews,
+                "reviewer_id": None,
+                "signed_at_utc": None,
+                "evidence_digest": None,
+            }
+        )
+        active_store.save(updated_bundle)
+        return updated_bundle
+
+    @app.post("/audits/{audit_id}/findings/bulk-review", response_model=AuditBundle)
+    def bulk_review_endpoint(
+        audit_id: str,
+        body: BulkReviewRequest,
+        request: Request,
+        tenant: CurrentTenant,
+    ) -> AuditBundle:
+        """Bulk approve or reject findings in an audit bundle with patch-binding checks."""
+        active_store: AuditStore = request.app.state.store
+        bundle = active_store.get(tenant.org_id, audit_id)
+        if bundle is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
+
+        findings_by_id = {f.finding_id: f for f in bundle.findings}
+        patches_by_finding = {p.finding_id: p for p in bundle.patches}
+        reviews_by_finding = {r.finding_id: r for r in bundle.reviews}
+
+        if body.finding_ids is None:
+            target_ids = [
+                f.finding_id
+                for f in bundle.findings
+                if (existing := reviews_by_finding.get(f.finding_id)) is None
+                or existing.status == "PENDING"
+            ]
+        else:
+            for fid in body.finding_ids:
+                if fid not in findings_by_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Finding not found: {fid}",
+                    )
+            target_ids = list(dict.fromkeys(body.finding_ids))
+
+        if body.status == "APPROVED":
+            final_target_ids: list[str] = []
+            for fid in target_ids:
+                patch = patches_by_finding.get(fid)
+                if patch is None:
+                    if body.finding_ids is not None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=f"Finding {fid} has no remediation patch to approve",
+                        )
+                    continue
+                try:
+                    validate_patch_binding(patch, findings_by_id)
+                except EvidenceMismatchError as exc:
+                    if body.finding_ids is not None:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=str(exc),
+                        ) from exc
+                    continue
+                final_target_ids.append(fid)
+        else:
+            final_target_ids = target_ids
+
+        now = datetime.now(UTC)
+        for fid in final_target_ids:
+            try:
+                reviews_by_finding[fid] = FindingReview(
+                    finding_id=fid,
+                    status=body.status,
+                    rejection_reason=body.rejection_reason,
+                    reviewer_id=tenant.sub,
+                    signed_at_utc=now,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=str(exc),
+                ) from exc
+
+        existing_ids = {r.finding_id for r in bundle.reviews}
+        updated_reviews = [reviews_by_finding[r.finding_id] for r in bundle.reviews]
+        for fid in final_target_ids:
+            if fid not in existing_ids:
+                updated_reviews.append(reviews_by_finding[fid])
+
+        updated_bundle = bundle.model_copy(
+            update={
                 "reviews": updated_reviews,
                 "reviewer_id": None,
                 "signed_at_utc": None,

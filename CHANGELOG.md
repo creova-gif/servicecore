@@ -64,3 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `GET /audits/{audit_id}/summary` returning lightweight executive counts without full findings payloads.
   - Added `verify_webhook_signature` helper (`src/servicecore/alerts.py`) for validating `X-ServiceCore-Signature-256` and `X-ServiceCore-Event` webhook deliveries.
   - Added Workbench Queue search filtering and `?` keyboard shortcuts help dialog.
+- **Wave 14 — Bulk Evidence-Bound Triage, Thread-Safe InMemory Store & Shortcuts Dialog Focus Restoration:**
+  - Added `POST /audits/{audit_id}/findings/bulk-review` for evidence-bound bulk finding approval.
+  - Added thread-safe locking to `InMemoryAuditStore` for concurrent access.
+  - Added `"Approve All Bound"` bulk triage action and keyboard shortcuts dialog focus restoration in the Workbench.

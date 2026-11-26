@@ -38,6 +38,11 @@ export interface PatchFindingReviewPayload {
   edited_after_snippet?: string | null;
 }
 
+export interface BulkReviewFindingsOptions {
+  findingIds?: string[];
+  rejectionReason?: string | null;
+}
+
 export interface ExportAuditResponse {
   audit_id: string;
   evidence_digest: string;
@@ -177,6 +182,32 @@ export async function patchFindingReview(
     `/audits/${encodeURIComponent(auditId)}/findings/${encodeURIComponent(findingId)}`,
     {
       method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/**
+ * Bulk-review multiple findings (or all pending bound findings) in a single request.
+ */
+export async function bulkReviewFindings(
+  auditId: string,
+  status: "APPROVED" | "REJECTED",
+  token: string,
+  options?: BulkReviewFindingsOptions,
+): Promise<AuditBundle> {
+  const payload: Record<string, unknown> = { status };
+  if (options?.findingIds !== undefined) {
+    payload.finding_ids = options.findingIds;
+  }
+  if (options?.rejectionReason !== undefined) {
+    payload.rejection_reason = options.rejectionReason;
+  }
+  return requestJson<AuditBundle>(
+    `/audits/${encodeURIComponent(auditId)}/findings/bulk-review`,
+    {
+      method: "POST",
       token,
       body: JSON.stringify(payload),
     },

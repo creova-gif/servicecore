@@ -62,52 +62,62 @@ class InMemoryAuditStore:
     """In-memory AuditStore keyed by (org_id, audit_id) for strict tenant isolation."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._bundles: dict[tuple[str, str], AuditBundle] = {}
         self._monitors: dict[tuple[str, str], MonitorSchedule] = {}
 
     def save(self, bundle: AuditBundle) -> None:
-        self._bundles[(bundle.org_id, bundle.audit_id)] = bundle
+        with self._lock:
+            self._bundles[(bundle.org_id, bundle.audit_id)] = bundle
 
     def get(self, org_id: str, audit_id: str) -> AuditBundle | None:
-        return self._bundles.get((org_id, audit_id))
+        with self._lock:
+            return self._bundles.get((org_id, audit_id))
 
     def delete_audit(self, org_id: str, audit_id: str) -> bool:
-        return self._bundles.pop((org_id, audit_id), None) is not None
+        with self._lock:
+            return self._bundles.pop((org_id, audit_id), None) is not None
 
     def list_for_org(self, org_id: str, limit: int = 50, offset: int = 0) -> list[AuditBundle]:
-        items = [
-            bundle
-            for (stored_org_id, _), bundle in self._bundles.items()
-            if stored_org_id == org_id
-        ]
-        return items[offset : offset + limit]
+        with self._lock:
+            items = [
+                bundle
+                for (stored_org_id, _), bundle in self._bundles.items()
+                if stored_org_id == org_id
+            ]
+            return items[offset : offset + limit]
 
     def save_monitor(self, monitor: MonitorSchedule) -> None:
-        self._monitors[(monitor.org_id, monitor.monitor_id)] = monitor
+        with self._lock:
+            self._monitors[(monitor.org_id, monitor.monitor_id)] = monitor
 
     def get_monitor(self, org_id: str, monitor_id: str) -> MonitorSchedule | None:
-        return self._monitors.get((org_id, monitor_id))
+        with self._lock:
+            return self._monitors.get((org_id, monitor_id))
 
     def list_monitors_for_org(
         self, org_id: str, limit: int = 50, offset: int = 0
     ) -> list[MonitorSchedule]:
-        items = [
-            monitor
-            for (stored_org_id, _), monitor in self._monitors.items()
-            if stored_org_id == org_id
-        ]
-        return items[offset : offset + limit]
+        with self._lock:
+            items = [
+                monitor
+                for (stored_org_id, _), monitor in self._monitors.items()
+                if stored_org_id == org_id
+            ]
+            return items[offset : offset + limit]
 
     def delete_monitor(self, org_id: str, monitor_id: str) -> bool:
-        return self._monitors.pop((org_id, monitor_id), None) is not None
+        with self._lock:
+            return self._monitors.pop((org_id, monitor_id), None) is not None
 
     def get_stats(self) -> dict[str, int]:
         """Return aggregate store counts for observability."""
-        return {
-            "total_audits": len(self._bundles),
-            "total_monitors": len(self._monitors),
-            "processed_stripe_events": 0,
-        }
+        with self._lock:
+            return {
+                "total_audits": len(self._bundles),
+                "total_monitors": len(self._monitors),
+                "processed_stripe_events": 0,
+            }
 
 
 class SQLiteAuditStore:

@@ -708,3 +708,142 @@ def test_get_audit_summary_counts_and_cross_tenant_404() -> None:
     assert signed_body["approved_count"] == 3
     assert signed_body["signed"] is True
     assert signed_body["evidence_digest"] == signed_bundle.evidence_digest
+
+
+def test_bulk_review_approves_evidence_bound_and_enforces_422_and_404() -> None:
+    store = InMemoryAuditStore()
+    app = create_app(
+        auth_secret=_AUTH_SECRET,
+        store=store,
+        scanner=_StubScanner(),
+        synthesizer=_StubSynthesizer(),  # type: ignore[arg-type]
+    )
+    client = TestClient(app)
+    token_a = mint_auth_token(org_id="org_bulk_a", sub="reviewer@a.com", secret=_AUTH_SECRET)
+    token_b = mint_auth_token(org_id="org_bulk_b", sub="reviewer@b.com", secret=_AUTH_SECRET)
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    now = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
+    findings = [
+        FindingEvidence(
+            finding_id=f"f-bulk-{idx}",
+            source="axe-core",
+            rule_id="image-alt",
+            severity="critical",
+            wcag_criterion="WCAG 2.1 SC 1.1.1 Non-text Content",
+            aoda_section="AODA IASR s.14(4)",
+            target_url="https://bulk.example.com",
+            target_selector=f"img.bulk-{idx}",
+            raw_snippet=f'<img class="bulk-{idx}" src="/{idx}.png">',
+            component_fingerprint=f"fp-bulk-{idx}",
+            raw_scanner_sha256="d" * 64,
+        )
+        for idx in range(1, 5)
+    ]
+    patches = [
+        # f-bulk-1: valid evidence-bound patch
+        RemediationPatch(
+            finding_id="f-bulk-1",
+            rule_id="image-alt",
+            target_selector="img.bulk-1",
+            patch_kind="html_diff",
+            before_snippet='<img class="bulk-1" src="/1.png">',
+            after_snippet='<img class="bulk-1" src="/1.png" alt="Bulk 1">',
+            wcag_criterion="WCAG 2.1 SC 1.1.1 Non-text Content",
+            aoda_section="AODA IASR s.14(4)",
+            component_fingerprint="fp-bulk-1",
+            synthesized_by="deterministic_template",
+        ),
+        # f-bulk-2: mismatched selector -> EvidenceMismatchError
+        RemediationPatch(
+            finding_id="f-bulk-2",
+            rule_id="image-alt",
+            target_selector="img.wrong-selector",
+            patch_kind="html_diff",
+            before_snippet='<img class="bulk-2" src="/2.png">',
+            after_snippet='<img class="bulk-2" src="/2.png" alt="Bulk 2">',
+            wcag_criterion="WCAG 2.1 SC 1.1.1 Non-text Content",
+            aoda_section="AODA IASR s.14(4)",
+            component_fingerprint="fp-bulk-2",
+            synthesized_by="deterministic_template",
+        ),
+        # f-bulk-3: no patch at all
+        # f-bulk-4: valid patch, but already REJECTED
+        RemediationPatch(
+            finding_id="f-bulk-4",
+            rule_id="image-alt",
+            target_selector="img.bulk-4",
+            patch_kind="html_diff",
+            before_snippet='<img class="bulk-4" src="/4.png">',
+            after_snippet='<img class="bulk-4" src="/4.png" alt="Bulk 4">',
+            wcag_criterion="WCAG 2.1 SC 1.1.1 Non-text Content",
+            aoda_section="AODA IASR s.14(4)",
+            component_fingerprint="fp-bulk-4",
+            synthesized_by="deterministic_template",
+        ),
+    ]
+    reviews = [
+        FindingReview(finding_id="f-bulk-1", status="PENDING"),
+        FindingReview(finding_id="f-bulk-2", status="PENDING"),
+        FindingReview(finding_id="f-bulk-3", status="PENDING"),
+        FindingReview(finding_id="f-bulk-4", status="REJECTED", rejection_reason="Out of scope"),
+    ]
+    bundle = AuditBundle(
+        audit_id="aud-bulk-1",
+        org_id="org_bulk_a",
+        target_url="https://bulk.example.com",
+        created_at_utc=now,
+        findings=findings,
+        patches=patches,
+        reviews=reviews,
+        telemetry=AuditTelemetry(scan_duration_ms=100),
+    )
+    store.save(bundle)
+
+    # Cross-tenant isolation returns 404
+    cross_resp = client.post(
+        "/audits/aud-bulk-1/findings/bulk-review",
+        headers=headers_b,
+        json={"status": "APPROVED"},
+    )
+    assert cross_resp.status_code == 404
+
+    # finding_ids=None approves only PENDING evidence-bound findings (f-bulk-1)
+    auto_resp = client.post(
+        "/audits/aud-bulk-1/findings/bulk-review",
+        headers=headers_a,
+        json={"status": "APPROVED"},
+    )
+    assert auto_resp.status_code == 200
+    reviews_after = {r["finding_id"]: r for r in auto_resp.json()["reviews"]}
+    assert reviews_after["f-bulk-1"]["status"] == "APPROVED"
+    assert reviews_after["f-bulk-1"]["reviewer_id"] == "reviewer@a.com"
+    assert reviews_after["f-bulk-1"]["signed_at_utc"] is not None
+    assert reviews_after["f-bulk-2"]["status"] == "PENDING"
+    assert reviews_after["f-bulk-3"]["status"] == "PENDING"
+    assert reviews_after["f-bulk-4"]["status"] == "REJECTED"
+
+    # Explicitly targeting a mismatched finding_id returns 422
+    mismatch_resp = client.post(
+        "/audits/aud-bulk-1/findings/bulk-review",
+        headers=headers_a,
+        json={"status": "APPROVED", "finding_ids": ["f-bulk-2"]},
+    )
+    assert mismatch_resp.status_code == 422
+
+    # Explicitly targeting an unpatched finding_id returns 422
+    unpatched_resp = client.post(
+        "/audits/aud-bulk-1/findings/bulk-review",
+        headers=headers_a,
+        json={"status": "APPROVED", "finding_ids": ["f-bulk-3"]},
+    )
+    assert unpatched_resp.status_code == 422
+
+    # Unknown finding_id returns 404
+    unknown_resp = client.post(
+        "/audits/aud-bulk-1/findings/bulk-review",
+        headers=headers_a,
+        json={"status": "APPROVED", "finding_ids": ["f-does-not-exist"]},
+    )
+    assert unknown_resp.status_code == 404

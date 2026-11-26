@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   ApiError,
   bootstrapDevToken,
+  bulkReviewFindings,
   createAudit,
   createMonitor,
   deleteAudit,
@@ -201,6 +202,33 @@ describe("audit API client functions", () => {
         edited_after_snippet: "<img alt='Logo' />",
       }),
     );
+  });
+
+  it("bulkReviewFindings sends POST /audits/:id/findings/bulk-review with encoded ID and options", async () => {
+    const bundle = makeAuditBundle();
+    const calls = mockFetch(() => Response.json(bundle, { status: 200 }));
+
+    const res = await bulkReviewFindings("aud/1", "APPROVED", "tok_bulk", {
+      findingIds: ["f-1", "f-2"],
+      rejectionReason: null,
+    });
+    assert.deepEqual(res, bundle);
+    assert.equal(
+      calls[0].url,
+      "http://localhost:8000/audits/aud%2F1/findings/bulk-review",
+    );
+    assert.equal(calls[0].init?.method, "POST");
+    assert.equal(
+      calls[0].init?.body,
+      JSON.stringify({
+        status: "APPROVED",
+        finding_ids: ["f-1", "f-2"],
+        rejection_reason: null,
+      }),
+    );
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("Authorization"), "Bearer tok_bulk");
+    assert.equal(headers.get("Content-Type"), "application/json");
   });
 
   it("exportAudit sends POST /audits/:id/export and returns export artifacts", async () => {

@@ -50,3 +50,6 @@
 - [x] Add outbound webhook HMAC-SHA256 signing, `DELETE /audits/{audit_id}` with org-scoped persistence, and concurrent SQLite WAL stress verification tests (Wave 11)
 - [x] Add monitor SSRF-on-write validation, 1 MiB request body-size DoS guard, `monitors-run-due` CLI subcommand, and two-click inline delete confirmation in `HeaderBar` / `MonitorsPanel` (Wave 12)
 - [x] Add `GET /audits/{audit_id}/summary` lightweight executive counts endpoint, `verify_webhook_signature` (`X-ServiceCore-Signature-256` / `X-ServiceCore-Event`), Workbench Queue search filtering, and `?` keyboard shortcuts dialog (Wave 13)
+
+## Wave 14: Bulk Evidence-Bound Triage, Thread-Safe InMemory Store & Focus Restoration
+- [x] Add `POST /audits/{audit_id}/findings/bulk-review` (evidence-bound bulk approval), thread-safe `InMemoryAuditStore`, Workbench `"Approve All Bound"` action, and shortcuts dialog focus restoration (Wave 14)

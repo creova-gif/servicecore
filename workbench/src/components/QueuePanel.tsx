@@ -106,6 +106,9 @@ export interface QueuePanelProps {
   onSelectFinding: (findingId: string) => void;
   onCloseDrawer: () => void;
   closeButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  pendingBoundCount: number;
+  onBulkApproveBound: () => void;
+  isBulkApproving?: boolean;
 }
 
 /**
@@ -126,6 +129,9 @@ export function QueuePanel({
   onSelectFinding,
   onCloseDrawer,
   closeButtonRef,
+  pendingBoundCount,
+  onBulkApproveBound,
+  isBulkApproving = false,
 }: QueuePanelProps) {
   return (
     <div className="flex h-full flex-col bg-[var(--bg-surface)] border-r border-[var(--border-hairline)]">
@@ -204,6 +210,21 @@ export function QueuePanel({
           );
         })}
       </div>
+
+      {pendingBoundCount > 0 ? (
+        <div className="border-b border-[var(--border-hairline)] px-4 py-2">
+          <button
+            type="button"
+            disabled={isBulkApproving}
+            onClick={onBulkApproveBound}
+            className="w-full min-h-[44px] lg:min-h-[32px] px-3 py-1.5 rounded bg-[var(--accent-verify)] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity tabular-nums"
+          >
+            {isBulkApproving
+              ? "Approving..."
+              : `Approve All Bound (${pendingBoundCount})`}
+          </button>
+        </div>
+      ) : null}
 
       {/* Search input */}
       <div className="flex items-center gap-1.5 border-b border-[var(--border-hairline)] px-4 py-2">

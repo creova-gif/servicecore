@@ -29,6 +29,7 @@ export interface HeaderBarProps {
   onToggleMonitors: () => void;
   helpOpen: boolean;
   onToggleHelp: () => void;
+  shortcutsTriggerRef: React.RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -62,6 +63,7 @@ export function HeaderBar({
   onToggleMonitors,
   helpOpen,
   onToggleHelp,
+  shortcutsTriggerRef,
 }: HeaderBarProps) {
   const [confirmingDeleteAudit, setConfirmingDeleteAudit] = useState(false);
 
@@ -242,6 +244,7 @@ export function HeaderBar({
         ) : null}
 
         <button
+          ref={shortcutsTriggerRef}
           type="button"
           onClick={onToggleHelp}
           aria-expanded={helpOpen}
